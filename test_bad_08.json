@@ -1,0 +1,12 @@
+[
+    {
+	"type": "camera",
+	"width": 1,
+	"height": 1
+    },
+    {
+	"type": "plane",
+	"color": [1, .75, .25],
+	"position": [1, .75, .25]
+    }
+]
