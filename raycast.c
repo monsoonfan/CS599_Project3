@@ -5,6 +5,7 @@ R Mitchell Ralston (rmr5)
 10/6/16
 --------------------------
 Implement Project3 as per assignment spec on BBLearn, adding illumination to the raycaster
+Removed the x_y_z struct (to store triplet of doubles) in favor of V3/3 element double array
 
 Organization:
 ------------
@@ -50,6 +51,7 @@ typedef struct PPM_file_struct {
   FILE* fh_out;
 } PPM_file_struct ;
 
+// coefficients of quadrics
 typedef struct A_J {
   double A;
   double B;
@@ -63,13 +65,21 @@ typedef struct A_J {
   double J;
 } A_J ;
 
+// these are flags which are set during parsing as values are stored, used for error checking the JSON only
 typedef struct has_values {
   int has_width;
   int has_height;
   int has_color;
+  int has_diffuse_color;
+  int has_specular_color;
   int has_position;
   int has_normal;
   int has_radius;
+  int has_direction;
+  int has_radial_a0;
+  int has_radial_a1;
+  int has_radial_a2;
+  int has_angular_a0;
   int has_A;
   int has_B;
   int has_C;
@@ -82,16 +92,23 @@ typedef struct has_values {
   int has_J;
 } has_values ;
   
+// not using unions because this makes it easier to reference
 typedef struct JSON_object {
   char *type;       // helpful to have both string and number reference for this
-  int  typecode;    // 0 = camera, 1 = sphere, 2 = plane, 3 = cylinder, 4 = quadric
+  int  typecode;    // 0 = camera, 1 = sphere, 2 = plane, 3 = cylinder, 4 = quadric, 5 = light
   double width;
   double height;
   double color[3];
+  double diffuse_color[3];
+  double specular_color[3];
   double position[3];
   double normal[3];
-  double center[3];
   double radius;
+  double direction[3];
+  double radial_a0;
+  double radial_a1;
+  double radial_a2;
+  double angular_a0;
   A_J coeffs;       // quadric coefficients
   has_values flags; // help with error checking, flag to make sure values are set
 } JSON_object ;
@@ -153,7 +170,7 @@ int CURRENT_CHAR        = 'a';
 int OUTPUT_MAGIC_NUMBER = 6; // default to P6 PPM format
 int VERBOSE             = 0; // controls logfile message level
 int ASCII_IMAGE         = 0; // controls if there is an ascii image printed to terminal while raycasting
-int INFO                = 0; // controls if Info messages are printed, turn off prior to submission
+int INFO                = 1; // controls if Info messages are printed, turn off prior to submission
 
 // global data structures
 JSON_file_struct    INPUT_FILE_DATA;
@@ -351,6 +368,11 @@ void readScene(char* filename) {
 	INPUT_FILE_DATA.js_objects[obj_count].type = "camera";
 	INPUT_FILE_DATA.js_objects[obj_count].typecode = 0;
 	INPUT_FILE_DATA.num_objects = obj_count + 1;
+      } else if (strcmp(value, "light") == 0) {
+	if (INFO) message("Info","Processing light object...");
+	INPUT_FILE_DATA.js_objects[obj_count].type = "light";
+	INPUT_FILE_DATA.js_objects[obj_count].typecode = 5;
+	INPUT_FILE_DATA.num_objects = obj_count + 1;
       } else if (strcmp(value, "sphere") == 0) {
 	if (INFO) message("Info","Processing sphere object...");
 	INPUT_FILE_DATA.js_objects[obj_count].type = "sphere";
@@ -397,6 +419,10 @@ void readScene(char* filename) {
 	  if ((strcmp(key, "width") == 0) ||
 	      (strcmp(key, "height") == 0) ||
 	      (strcmp(key, "radius") == 0) ||
+	      (strcmp(key, "radial-a0") == 0) ||
+	      (strcmp(key, "radial-a1") == 0) ||
+	      (strcmp(key, "radial-a2") == 0) ||
+	      (strcmp(key, "angular-a0") == 0) ||
 	      (strcmp(key, "A") == 0) ||
 	      (strcmp(key, "B") == 0) ||
 	      (strcmp(key, "C") == 0) ||
@@ -412,11 +438,15 @@ void readScene(char* filename) {
 	    // Error checking
 	    if (strcmp(type,"sphere") == 0 && strcmp(key,"radius") != 0) message("Error","Sphere has extra value");
 	    if (strcmp(type,"plane") == 0) message("Error","Plane has value that makes no sense(width,radius,etc)");
+	    // TODO add checks for project3 new params (like radial-a0 < 360, etc..)
 	    // store the value if pass checks
 	    storeDouble(obj_count,key,value);
 	  } else if ((strcmp(key, "color") == 0) ||
+		     (strcmp(key, "diffuse_color") == 0) ||
+		     (strcmp(key, "specular_color") == 0) ||
 		     (strcmp(key, "position") == 0) ||
-		     (strcmp(key, "normal") == 0)) {
+		     (strcmp(key, "normal") == 0) ||
+		     (strcmp(key, "direction") == 0)) {
 	    double* value = nextVector(json);
 	    // Error checking
 	    if (strcmp(type,"sphere") == 0 && strcmp(key,"normal") == 0)
@@ -735,6 +765,9 @@ void printJSONObjectStruct (JSON_object jostruct) {
   if (strcmp(jostruct.type,"camera") == 0) {
     printf(" width: %f\n",jostruct.width);
     printf("height: %f\n",jostruct.height);
+  } else if (strcmp(jostruct.type,"light") == 0) {
+    printf("    color: [%f, %f, %f]\n",jostruct.color[0], jostruct.color[1], jostruct.color[2]);
+    printf(" position: [%f, %f, %f]\n",jostruct.position[0], jostruct.position[1], jostruct.position[2]);
   } else if (strcmp(jostruct.type,"sphere") == 0) {
     printf("    color: [%f, %f, %f]\n",jostruct.color[0], jostruct.color[1], jostruct.color[2]);
     printf(" position: [%f, %f, %f]\n",jostruct.position[0], jostruct.position[1], jostruct.position[2]);
@@ -788,6 +821,18 @@ void storeDouble(int obj_count, char* key, double value) {
   } else if (strcmp(key,"radius") == 0) {
     INPUT_FILE_DATA.js_objects[obj_count].radius = value;
     INPUT_FILE_DATA.js_objects[obj_count].flags.has_radius = value;
+  } else if (strcmp(key,"radial-a0") == 0) {
+    INPUT_FILE_DATA.js_objects[obj_count].radial_a0 = value;
+    INPUT_FILE_DATA.js_objects[obj_count].flags.has_radial_a0 = value;
+  } else if (strcmp(key,"radial-a1") == 0) {
+    INPUT_FILE_DATA.js_objects[obj_count].radial_a1 = value;
+    INPUT_FILE_DATA.js_objects[obj_count].flags.has_radial_a1 = value;
+  } else if (strcmp(key,"radial-a2") == 0) {
+    INPUT_FILE_DATA.js_objects[obj_count].radial_a2 = value;
+    INPUT_FILE_DATA.js_objects[obj_count].flags.has_radial_a2 = value;
+  } else if (strcmp(key,"angular-a0") == 0) {
+    INPUT_FILE_DATA.js_objects[obj_count].angular_a0 = value;
+    INPUT_FILE_DATA.js_objects[obj_count].flags.has_angular_a0 = value;
   } else if (strcmp(key, "A") == 0) {
     INPUT_FILE_DATA.js_objects[obj_count].coeffs.A = value;
     INPUT_FILE_DATA.js_objects[obj_count].flags.has_A = 1;
@@ -832,6 +877,16 @@ void storeVector(int obj_count, char* key, double* value) {
     INPUT_FILE_DATA.js_objects[obj_count].color[1] = value[1];
     INPUT_FILE_DATA.js_objects[obj_count].color[2] = value[2];
     INPUT_FILE_DATA.js_objects[obj_count].flags.has_color = 1;
+  } else if (strcmp(key,"diffuse_color") == 0) {
+    INPUT_FILE_DATA.js_objects[obj_count].diffuse_color[0] = value[0];
+    INPUT_FILE_DATA.js_objects[obj_count].diffuse_color[1] = value[1];
+    INPUT_FILE_DATA.js_objects[obj_count].diffuse_color[2] = value[2];
+    INPUT_FILE_DATA.js_objects[obj_count].flags.has_diffuse_color = 1;
+  } else if (strcmp(key,"specular_color") == 0) {
+    INPUT_FILE_DATA.js_objects[obj_count].specular_color[0] = value[0];
+    INPUT_FILE_DATA.js_objects[obj_count].specular_color[1] = value[1];
+    INPUT_FILE_DATA.js_objects[obj_count].specular_color[2] = value[2];
+    INPUT_FILE_DATA.js_objects[obj_count].flags.has_specular_color = 1;
   } else if (strcmp(key,"position") == 0) {
     INPUT_FILE_DATA.js_objects[obj_count].position[0] = value[0];
     INPUT_FILE_DATA.js_objects[obj_count].position[1] = value[1];
@@ -842,6 +897,11 @@ void storeVector(int obj_count, char* key, double* value) {
     INPUT_FILE_DATA.js_objects[obj_count].normal[1] = value[1];
     INPUT_FILE_DATA.js_objects[obj_count].normal[2] = value[2];
     INPUT_FILE_DATA.js_objects[obj_count].flags.has_normal = 1;
+  } else if (strcmp(key,"direction") == 0) {
+    INPUT_FILE_DATA.js_objects[obj_count].direction[0] = value[0];
+    INPUT_FILE_DATA.js_objects[obj_count].direction[1] = value[1];
+    INPUT_FILE_DATA.js_objects[obj_count].direction[2] = value[2];
+    INPUT_FILE_DATA.js_objects[obj_count].flags.has_direction = 1;
   } else {
     // This should never happen
     message("Error","Interally trying to store unknown vector key type");
@@ -932,8 +992,11 @@ void  rayCast(JSON_object *scene, RGBPixel *image) {
 				   INPUT_FILE_DATA.js_objects[o].position,
 				   INPUT_FILE_DATA.js_objects[o].coeffs);
 	  break;
+	  // TODO: add case for light here
+	case 5:
+	  break;
 	default:
-	  message("Error","Unhandled typecode, camera/plane/sphere are supported");
+	  message("Error","Unhandled typecode, camera/light/plane/sphere are supported");
 	}
 	if (t > 0 && t < best_t) {
 	  best_t = t;
@@ -945,9 +1008,15 @@ void  rayCast(JSON_object *scene, RGBPixel *image) {
       // t values, that hit first, color that one
       if (best_t > 0 && best_t != INFINITY) {
 	if (ASCII_IMAGE) printf("#");
-	RGB_PIXEL_MAP[i].r = shadePixel(scene[best_t_index].color[0]);
-	RGB_PIXEL_MAP[i].g = shadePixel(scene[best_t_index].color[1]);
-	RGB_PIXEL_MAP[i].b = shadePixel(scene[best_t_index].color[2]);
+	if (scene[best_t_index].flags.has_color) {
+	  RGB_PIXEL_MAP[i].r = shadePixel(scene[best_t_index].color[0]);
+	  RGB_PIXEL_MAP[i].g = shadePixel(scene[best_t_index].color[1]);
+	  RGB_PIXEL_MAP[i].b = shadePixel(scene[best_t_index].color[2]);
+	} else {
+	  RGB_PIXEL_MAP[i].r = shadePixel(scene[best_t_index].diffuse_color[0]);
+	  RGB_PIXEL_MAP[i].g = shadePixel(scene[best_t_index].diffuse_color[1]);
+	  RGB_PIXEL_MAP[i].b = shadePixel(scene[best_t_index].diffuse_color[2]);
+	}
       } else {
 	if (ASCII_IMAGE) printf(".");
 	RGB_PIXEL_MAP[i].r = shadePixel(DEFAULT_COLOR);
@@ -1156,7 +1225,7 @@ void checkJSON (JSON_object *object) {
 	message("Error","Sphere object is missing radius or is zero!");
       if (!object[o].flags.has_position)      
 	message("Error","Sphere object is missing position!");
-      if (!object[o].flags.has_color)      
+      if (!object[o].flags.has_color && !(object[o].flags.has_diffuse_color && object[o].flags.has_specular_color))
 	message("Error","Sphere object is missing color!");
       if (object[o].width || object[o].height || sizeof(object[o].normal) > 0)
 	if (INFO) message("Info","Ignoring sphere object properties in excess of radius/position/color");
@@ -1196,6 +1265,13 @@ void checkJSON (JSON_object *object) {
 	message("Error","Quadric object is missing I parameter!");
       if (!object[o].flags.has_J)      
 	message("Error","Quadric object is missing J parameter!");
+      break;
+      // TODO: may need to add other checks for lights in project 3
+    case 5:
+      if (!object[o].flags.has_position)      
+	message("Error","Light object is missing position!");
+      if (!object[o].flags.has_color)      
+	message("Error","Light  object is missing color!");
       break;
     default:
       message("Error","Un-caught error, was missed during parsing");
