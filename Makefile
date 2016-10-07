@@ -31,6 +31,7 @@ cone:
 # targets for testing good and bad json files
 #############################################
 testgood.%:
+#	rm test.ppm
 	gcc raycast.c -o raycast
 	./raycast 600 600 test_good_$*.json test.ppm
 	emacs test.ppm
@@ -42,9 +43,14 @@ testbad.%:
 #############################################
 # targets for simple test configs
 #############################################
+test0:
+	gcc raycast.c -o raycast
+	./raycast 60 60 test_good_00.json test.ppm
+	emacs test.ppm
+
 test1:
 	gcc raycast.c -o raycast
-	./raycast 60 30 test_good_01.json test.ppm
+	./raycast 60 60 test_good_01.json test.ppm
 	emacs test.ppm
 
 test2:
