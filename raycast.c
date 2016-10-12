@@ -195,7 +195,7 @@ static inline void vScale(double* a, double s, double* c) {
 int OUTPUT_MAGIC_NUMBER = 6; // default to P6 PPM format
 int VERBOSE             = 0; // controls logfile message level
 int INFO                = 1; // controls if Info messages are printed, turn off prior to submission
-int DBG                 = 1; // turns on the current set of DBG statements, whatever they are
+int DBG                 = 0; // turns on the current set of DBG statements, whatever they are
 
 double ambient_color[3] = {0.1,0.1,0.1}; // HACK: define these until ambient color from JSON supported
 
@@ -1189,10 +1189,12 @@ void rayCast(double* Ro, double* Rd, double* color_in, double* color_out) {
 */
 	  //N = normal of the object we are testing for shadows
 	  getObjectNormal(best_t_index,Ro_new,N);
+	  vNormalize(N);
 	  //L = the new vector to the light source from shadow test object
 	  L[0] = Rd_new[0];
 	  L[1] = Rd_new[1];
 	  L[2] = Rd_new[2];
+	  vNormalize(L);
 	  //V = original ray from camera to first object
 	  V[0] = Rd[0];
 	  V[1] = Rd[1];
@@ -1671,24 +1673,20 @@ double Idiff (int o_index, int c_index, double* N, double* L) {
   int Ia = 1;
   int Kd = 1; // this is a placeholder for now
   double rval; // helps with debug
-  // I think this is right
+  // I think this is right, that Il is the diffuse color of the object
   // TODO: handle the case where there is no diffuse color given in JSON
   //double Il = INPUT_FILE_DATA.js_objects[o_index].diffuse_color[c_index];
   double Il = INPUT_FILE_DATA.js_objects[o_index].color[c_index];
 
   // calculations
   double NdotL = vDot(N,L);
-  //TODO fix hack_num
-  double hack_num = 1 / (1 - NdotL);
 
   if (NdotL > 0) {
-    //    rval = Ka*Ia + Kd*Il*NdotL;
-    rval = Ka*Ia + Kd*Il*hack_num;
+    rval = Ka*Ia + Kd*Il*NdotL;
   } else {
     rval = Ka*Ia;
   }
-  //  if (DBG) printf("DBG Idiff(%f): o_i(%d), c_i(%d), Il(%f), NdL(%f), N[%f,%f,%f], L[%f,%f,%f]\n",rval,o_index,c_index,Il,NdotL,N[0],N[1],N[2],L[0],L[1],L[2]);
-    if (DBG) printf("DBG Idiff(%f): o_i(%d), c_i(%d), Il(%f), NdL(%f), N[%f,%f,%f], L[%f,%f,%f]\n",rval,o_index,c_index,Il,hack_num,N[0],N[1],N[2],L[0],L[1],L[2]);
+  if (DBG) printf("DBG Idiff(%f): o_i(%d), c_i(%d), Il(%f), NdL(%f), N[%f,%f,%f], L[%f,%f,%f]\n",rval,o_index,c_index,Il,NdotL,N[0],N[1],N[2],L[0],L[1],L[2]);
   return rval;
 }
 
