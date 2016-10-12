@@ -24,7 +24,7 @@ Questions:
 - what is the format for ambient lights in JSON, I want to do it in this project, (or just #define the ambient light
 - actually, we can't just skip an object itself, what about sphere's dark side shades itself from light? So, how to
   make the numbers work? Get some very strange patterns (like speckles) without massaging them...
-- Idiff equation when VdotL > 0?
+- fRad a2,a1,a0 coefficients
 
 - C question - what if I create some var 'double* var;', then malloc it way later, and OS used memory adjacent var??
 ---------------------------------------------------------------------------------------
@@ -189,6 +189,9 @@ static inline void vScale(double* a, double s, double* c) {
   c[2] = s * a[2];
 }
 
+static inline double pDistance (double* a, double* b) {
+  return sqrt(sqr(b[0]-a[0]) + sqr(b[1]-a[1]) + sqr(b[2]-a[2]));
+}
 // END inline functions
 
 // global variables
@@ -1084,27 +1087,6 @@ void rayCast(double* Ro, double* Rd, double* color_in, double* color_out) {
     int    best_t_shadow_index = 129; // then maintain this throughout code
     double best_t_shadow = INFINITY;
 
-    int DBG_OLD_WAY = 0;
-    if (DBG_OLD_WAY) {
-      // blend the ambient color
-      color_out[0] = getColor(color_in[0],ambient_color[0]);
-      color_out[1] = getColor(color_in[1],ambient_color[1]);
-      color_out[2] = getColor(color_in[2],ambient_color[2]);
-      
-      // Add in the color of the object itself
-      // TODO: maybe we should make the color black if there is no light shining? Certainly, with no ambient,
-      //       we would not see any color from the object without a light source
-      if (INPUT_FILE_DATA.js_objects[best_t_index].flags.has_color) {
-	color_out[0] = getColor(INPUT_FILE_DATA.js_objects[best_t_index].color[0],color_out[0]);
-	color_out[1] = getColor(INPUT_FILE_DATA.js_objects[best_t_index].color[1],color_out[1]);
-	color_out[2] = getColor(INPUT_FILE_DATA.js_objects[best_t_index].color[2],color_out[2]);
-      } else if (INPUT_FILE_DATA.js_objects[best_t_index].flags.has_diffuse_color) {
-	color_out[0] = getColor(INPUT_FILE_DATA.js_objects[best_t_index].diffuse_color[0],color_out[0]);
-	color_out[1] = getColor(INPUT_FILE_DATA.js_objects[best_t_index].diffuse_color[1],color_out[1]);
-	color_out[2] = getColor(INPUT_FILE_DATA.js_objects[best_t_index].diffuse_color[2],color_out[2]);
-      }
-    }
-    
     // now, the summation of all the lights in the scene
     for (int j = 0; j < LIGHT_OBJECTS.num_lights; j++) {
       // shadow test for each light, first create new Ro for the shadow test
@@ -1130,6 +1112,7 @@ void rayCast(double* Ro, double* Rd, double* color_in, double* color_out) {
 	if (k == best_t_index) continue;
 
 	// also, remember you need to clamp the distance to not go beyond the light's distance to object beyond it
+	if (0) continue;
 
 	// test for intersections to find shadows
 	// TODO: use functionized code instead of this copy/paste hack
@@ -1209,7 +1192,8 @@ void rayCast(double* Ro, double* Rd, double* color_in, double* color_out) {
 	  //ka, kd, ks (these are constants from the JSON file)
 
 	  // compute radial attenuation
-	  double dl; // distance from object to light
+	  double dl = pDistance(light_position,Ro_new); // distance from object to light
+	  dl *= .1; // TODO remove this after fRad coeffs are understood
 	  double r_atten = fRad (LIGHT_OBJECTS.light_objects[j].radial_a0, 1, 1, dl); //params:(a2,a1,a0,dl)
 	  
 	  // compute the angular attenuation
@@ -1231,7 +1215,7 @@ void rayCast(double* Ro, double* Rd, double* color_in, double* color_out) {
 	  specular[1] = Ispec(k, 1, V, R, N, L, ns);
 	  specular[2] = Ispec(k, 2, V, R, N, L, ns);
 
-	  double tmp = color_out[0];
+	  double tmp = color_out[0]; // for the DBG statement
 	  color_out[0] += r_atten * a_atten * (diffuse[0] + specular[0]);
 	  if (DBG) printf("DBG co[0](%f): co(%f), r_a(%f), a_a(%f), d(%f), s(%f)\n"
 		 ,color_out[0],tmp,r_atten,a_atten,diffuse[0],specular[0]);
@@ -1686,7 +1670,7 @@ double Idiff (int o_index, int c_index, double* N, double* L) {
   } else {
     rval = Ka*Ia;
   }
-  if (DBG) printf("DBG Idiff(%f): o_i(%d), c_i(%d), Il(%f), NdL(%f), N[%f,%f,%f], L[%f,%f,%f]\n",rval,o_index,c_index,Il,NdotL,N[0],N[1],N[2],L[0],L[1],L[2]);
+  //  if (DBG) printf("DBG Idiff(%f): o_i(%d), c_i(%d), Il(%f), NdL(%f), N[%f,%f,%f], L[%f,%f,%f]\n",rval,o_index,c_index,Il,NdotL,N[0],N[1],N[2],L[0],L[1],L[2]);
   return rval;
 }
 

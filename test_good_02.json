@@ -5,6 +5,12 @@
 "height": 0.9
 },
 {
+"type": "light",
+"color": [3.0, 2.0, 1.0],
+"position": [15, 10, 30],
+"radial-a2": 1
+},
+{
 "type": "sphere",
 "color": [1.0, 0, 0],
 "position": [-5, -2, 20],
