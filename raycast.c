@@ -14,9 +14,19 @@ functions are named with camelCase naming convention
 
 Issues:
 -------
+- need to get light sources working
+- fix intersection equations so that Ro doesn't have to be 0,0,0
+- add getColor code per equations to return proper shaded color
 
 Questions:
 ---------
+- how does c = -(vDot(uLs,ns))cL;  relate to the color of the object the light is reflecting off of?
+- what is the format for ambient lights in JSON, I want to do it in this project, (or just #define the ambient light
+- actually, we can't just skip an object itself, what about sphere's dark side shades itself from light? So, how to
+  make the numbers work? Get some very strange patterns (like speckles) without massaging them...
+- Idiff equation when VdotL > 0?
+
+- C question - what if I create some var 'double* var;', then malloc it way later, and OS used memory adjacent var??
 ---------------------------------------------------------------------------------------
 */
 #include <stdio.h>
@@ -114,6 +124,22 @@ typedef struct JSON_object {
   has_values flags; // help with error checking, flag to make sure values are set
 } JSON_object ;
 
+// Will create an array of these separate from other JSON objects
+typedef struct light_object {
+  double color[3];
+  double position[3];
+  double direction[3];
+  double radial_a0;
+  double radial_a1;
+  double radial_a2;
+  double angular_a0;
+} light_object ;
+
+typedef struct light_object_struct {
+  int num_lights;
+  light_object light_objects[128];
+} light_object_struct ;
+
 // This may not be the best approach, and it's certainly not most efficient - to have an array that
 // is always 128 "JSON_object"s large. But it's clean and all of the data related to the JSON
 // scene file is in this one struct, filehandle and all, that's what I like about it.
@@ -124,8 +150,6 @@ typedef struct JSON_file_struct {
   int num_objects;
   JSON_object js_objects[128];
 } JSON_file_struct ;
-
-typedef double* V3;
 
 // inline functions:
 static inline double sqr (double v) {
@@ -139,45 +163,48 @@ static inline void vNormalize (double* v) {
   v[2] /= len;
 }
 
-static inline void vAdd(V3 a, V3 b, V3 c) {
+static inline void vAdd(double* a, double* b, double* c) {
   c[0] = a[0] + b[0];
   c[1] = a[1] + b[1];
   c[2] = a[2] + b[2];
 }
 
-static inline void vSubtract(V3 a, V3 b, V3 c) {
+static inline void vSubtract(double* a, double* b, double* c) {
   c[0] = a[0] - b[0];
   c[1] = a[1] - b[1];
   c[2] = a[2] - b[2];
 }
 
-static inline double vDot(V3 a, V3 b) {
+static inline double vDot(double* a, double* b) {
   return a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
 }
 
-static inline double vNorm(V3 a) {
+static inline double vNorm(double* a) {
   return sqrt(vDot(a,a));
 }
 
-static inline void vScale(V3 a, double s, V3 c) {
+static inline void vScale(double* a, double s, double* c) {
   c[0] = s * a[0];
   c[1] = s * a[1];
   c[2] = s * a[2];
 }
+
 // END inline functions
 
 // global variables
-int CURRENT_CHAR        = 'a';
 int OUTPUT_MAGIC_NUMBER = 6; // default to P6 PPM format
 int VERBOSE             = 0; // controls logfile message level
-int ASCII_IMAGE         = 0; // controls if there is an ascii image printed to terminal while raycasting
 int INFO                = 1; // controls if Info messages are printed, turn off prior to submission
+int DBG                 = 1; // turns on the current set of DBG statements, whatever they are
+
+double ambient_color[3] = {0.1,0.1,0.1}; // HACK: define these until ambient color from JSON supported
 
 // global data structures
 JSON_file_struct    INPUT_FILE_DATA;
 RGBPixel           *RGB_PIXEL_MAP;
 PPM_file_struct     OUTPUT_FILE_DATA;
 RGBAPixel          *RGBA_PIXEL_MAP;
+light_object_struct LIGHT_OBJECTS;
 
 // functions
 void  writePPM        (char *outfile,         PPM_file_struct *input);
@@ -191,6 +218,7 @@ void  storeDouble           (int obj_count, char* key, double value);
 void  storeVector           (int obj_count, char* key, double* value);
 void  renderScene           (JSON_object *scene, RGBPixel *image);
 
+double getIntersections     (int index, double* Ro, double* Rd, double t_i);
 double sphereIntersection   (double* Ro, double* Rd, double* C, double r);
 double planeIntersection    (double* Ro, double* Rd, double* C, double* N);
 double quadricIntersection  (double* Ro, double* Rd, double* C, A_J c);
@@ -199,8 +227,14 @@ double cylinderIntersection (double* Ro, double* Rd, double* C, double r);
 //double * rayCast               (double* Ro, double* Rd, double* color);
 void rayCast(double* Ro, double* Rd, double* color_in, double* color_out);
 
-double getColor (double value1, double value2);
+double getColor        (double value1, double value2);
+void   getObjectNormal (int index, double* Ro, double* N);
 unsigned char convertColor (double color);
+
+double fAng (int index, double a1, double* V);
+double fRad (double a2, double a1, double a0, double dl);
+double Idiff (int o_index, int c_index, double* N, double* L);
+double Ispec (int o_index, int c_index, double* V, double* R, double* N, double* L, double ns);
 
 void  help();
 int   computeDepth();
@@ -210,6 +244,7 @@ void  closeAndExit ();
 void  reportScene();
 double getCameraWidth();
 double getCameraHeight();
+void   populateLightArray ();
 
 
 /* 
@@ -525,6 +560,7 @@ int main(int argc, char *argv[]) {
 
   // parse the JSON
   readScene(infile);
+  populateLightArray();
   
   // error checking
   checkJSON(INPUT_FILE_DATA.js_objects);
@@ -827,19 +863,19 @@ void storeDouble(int obj_count, char* key, double value) {
     INPUT_FILE_DATA.js_objects[obj_count].flags.has_height = 1;
   } else if (strcmp(key,"radius") == 0) {
     INPUT_FILE_DATA.js_objects[obj_count].radius = value;
-    INPUT_FILE_DATA.js_objects[obj_count].flags.has_radius = value;
+    INPUT_FILE_DATA.js_objects[obj_count].flags.has_radius = 1;
   } else if (strcmp(key,"radial-a0") == 0) {
     INPUT_FILE_DATA.js_objects[obj_count].radial_a0 = value;
-    INPUT_FILE_DATA.js_objects[obj_count].flags.has_radial_a0 = value;
+    INPUT_FILE_DATA.js_objects[obj_count].flags.has_radial_a0 = 1;
   } else if (strcmp(key,"radial-a1") == 0) {
     INPUT_FILE_DATA.js_objects[obj_count].radial_a1 = value;
-    INPUT_FILE_DATA.js_objects[obj_count].flags.has_radial_a1 = value;
+    INPUT_FILE_DATA.js_objects[obj_count].flags.has_radial_a1 = 1;
   } else if (strcmp(key,"radial-a2") == 0) {
     INPUT_FILE_DATA.js_objects[obj_count].radial_a2 = value;
-    INPUT_FILE_DATA.js_objects[obj_count].flags.has_radial_a2 = value;
+    INPUT_FILE_DATA.js_objects[obj_count].flags.has_radial_a2 = 1;
   } else if (strcmp(key,"angular-a0") == 0) {
     INPUT_FILE_DATA.js_objects[obj_count].angular_a0 = value;
-    INPUT_FILE_DATA.js_objects[obj_count].flags.has_angular_a0 = value;
+    INPUT_FILE_DATA.js_objects[obj_count].flags.has_angular_a0 = 1;
   } else if (strcmp(key, "A") == 0) {
     INPUT_FILE_DATA.js_objects[obj_count].coeffs.A = value;
     INPUT_FILE_DATA.js_objects[obj_count].flags.has_A = 1;
@@ -938,6 +974,7 @@ void renderScene(JSON_object *scene, RGBPixel *image) {
   double pixheight = h / M;
   int i = 0; // pixelmap counter, since my pixelmap is a flat array
   
+  if (INFO) printf("Info: rendering %d x %d image to memory ...\n",N,M);
 
   //////////////////////////////////////
   // copy of psuedo code from text/class
@@ -977,24 +1014,24 @@ void renderScene(JSON_object *scene, RGBPixel *image) {
 // Raycaster function - returns the color found by casting a ray from Ro in Rd direction
 //double * rayCast(double* Ro, double* Rd, double* color) { // warning about returning local variable
 void rayCast(double* Ro, double* Rd, double* color_in, double* color_out) {
-
-  ////////////
+  
   // variables
-  ////////////
-  int intersect = 0; // dummy var while intersection tests not working
-
+  double best_t = INFINITY;
+  int    best_t_index = 129;
+  double object_color[3];
+  
   // next, need to make Rd so that it's actually normalized
   // TODO: here, or in the calling function?
   //      vNormalize(Rd);
-
-  double best_t = INFINITY;
-  int    best_t_index = 129;
-
-  // loop over all objects in scene and find intersections
+  
+  // loop over all objects in scene and find intersections, could also use objects != NULL
   for (int o = 0; o < INPUT_FILE_DATA.num_objects; o += 1) {
     // t stores if we have an intersection or not
     double t = 0;
     
+    // TODO: functionize this code
+    //t = getIntersections(o,Ro,Rd);
+    //getIntersections(o,Ro,Rd,t);
     switch(INPUT_FILE_DATA.js_objects[o].typecode) {
     case 0: // skip the camera
       break;
@@ -1024,26 +1061,191 @@ void rayCast(double* Ro, double* Rd, double* color_in, double* color_out) {
     default:
       message("Error","Unhandled typecode, camera/light/plane/sphere are supported");
     }
+
     if (t > 0 && t < best_t) {
       best_t = t;
       best_t_index = o;
+      // Need the object color shadow case
+      object_color[0] = INPUT_FILE_DATA.js_objects[o].color[0];
+      object_color[1] = INPUT_FILE_DATA.js_objects[o].color[1];
+      object_color[2] = INPUT_FILE_DATA.js_objects[o].color[2];
     }
+    // if (DBG) printf("DBG t = %f for index %d, b_t: (%f), b_t_i: (%f)\n",t,o,best_t,best_t_index);
   }
+
   // Now look at the t value and see if there was an intersection
   // remember that you could have multiple objects in from of each other, check for the smaller of the
-  // t values, that hit first, color that one
+  // t values, that hit first, shade that one
   if (best_t > 0 && best_t != INFINITY) {
-    //printf("DBG: in raycast, about to assign color for object %d, %s...\n",best_t_index,INPUT_FILE_DATA.js_objects[best_t_index].type);
-    if (INPUT_FILE_DATA.js_objects[best_t_index].flags.has_color) {
-      color_out[0] = getColor(INPUT_FILE_DATA.js_objects[best_t_index].color[0],color_in[0]);
-      color_out[1] = getColor(INPUT_FILE_DATA.js_objects[best_t_index].color[1],color_in[1]);
-      color_out[2] = getColor(INPUT_FILE_DATA.js_objects[best_t_index].color[2],color_in[2]);
-    } else if (INPUT_FILE_DATA.js_objects[best_t_index].flags.has_diffuse_color) {
-      color_out[0] = getColor(INPUT_FILE_DATA.js_objects[best_t_index].diffuse_color[0],color_in[0]);
-      color_out[1] = getColor(INPUT_FILE_DATA.js_objects[best_t_index].diffuse_color[1],color_in[1]);
-      color_out[2] = getColor(INPUT_FILE_DATA.js_objects[best_t_index].diffuse_color[2],color_in[2]);
+    
+    // Notes from 10/16
+    // Add the shading function, project3 main task
+    double t_shadow = 0;
+    int    best_t_shadow_index = 129; // then maintain this throughout code
+    double best_t_shadow = INFINITY;
+
+    int DBG_OLD_WAY = 0;
+    if (DBG_OLD_WAY) {
+      // blend the ambient color
+      color_out[0] = getColor(color_in[0],ambient_color[0]);
+      color_out[1] = getColor(color_in[1],ambient_color[1]);
+      color_out[2] = getColor(color_in[2],ambient_color[2]);
+      
+      // Add in the color of the object itself
+      // TODO: maybe we should make the color black if there is no light shining? Certainly, with no ambient,
+      //       we would not see any color from the object without a light source
+      if (INPUT_FILE_DATA.js_objects[best_t_index].flags.has_color) {
+	color_out[0] = getColor(INPUT_FILE_DATA.js_objects[best_t_index].color[0],color_out[0]);
+	color_out[1] = getColor(INPUT_FILE_DATA.js_objects[best_t_index].color[1],color_out[1]);
+	color_out[2] = getColor(INPUT_FILE_DATA.js_objects[best_t_index].color[2],color_out[2]);
+      } else if (INPUT_FILE_DATA.js_objects[best_t_index].flags.has_diffuse_color) {
+	color_out[0] = getColor(INPUT_FILE_DATA.js_objects[best_t_index].diffuse_color[0],color_out[0]);
+	color_out[1] = getColor(INPUT_FILE_DATA.js_objects[best_t_index].diffuse_color[1],color_out[1]);
+	color_out[2] = getColor(INPUT_FILE_DATA.js_objects[best_t_index].diffuse_color[2],color_out[2]);
+      }
+    }
+    
+    // now, the summation of all the lights in the scene
+    for (int j = 0; j < LIGHT_OBJECTS.num_lights; j++) {
+      // shadow test for each light, first create new Ro for the shadow test
+      double Ro_tmp[3];
+      double Ro_new[3];
+      vScale(Rd,best_t,Ro_tmp);
+      vAdd(Ro,Ro_tmp,Ro_new);
+      
+      // next, create new Rd for the shadow test
+      double Rd_new[3];
+      double light_position[3];
+      light_position[0] = LIGHT_OBJECTS.light_objects[j].position[0];
+      light_position[1] = LIGHT_OBJECTS.light_objects[j].position[1];
+      light_position[2] = LIGHT_OBJECTS.light_objects[j].position[2];
+      vSubtract(light_position,Ro_new,Rd_new);
+      
+      // now iterate over each object in the design and check for intersection, indicating a shadow
+      for (int k = 0; k < INPUT_FILE_DATA.num_objects ; k++) { 
+	// skip lights, won't have intersections
+	if (INPUT_FILE_DATA.js_objects[k].typecode == 5) continue;
+	
+	// how to deal with the object we are checking from itself, could shadow parts of itself from the light
+	if (k == best_t_index) continue;
+
+	// also, remember you need to clamp the distance to not go beyond the light's distance to object beyond it
+
+	// test for intersections to find shadows
+	// TODO: use functionized code instead of this copy/paste hack
+	switch(INPUT_FILE_DATA.js_objects[k].typecode) {
+	case 0: // skip the camera
+	  break;
+	case 1:
+	  t_shadow = sphereIntersection(Ro_new,Rd_new,
+				 INPUT_FILE_DATA.js_objects[k].position,
+				 INPUT_FILE_DATA.js_objects[k].radius);
+	  break;
+	case 2:	
+	  t_shadow = planeIntersection(Ro_new,Rd_new,
+				INPUT_FILE_DATA.js_objects[k].position,
+				INPUT_FILE_DATA.js_objects[k].normal);
+	  break;
+	case 3:
+	  t_shadow = cylinderIntersection(Ro_new,Rd_new,
+				   INPUT_FILE_DATA.js_objects[k].position,
+				   INPUT_FILE_DATA.js_objects[k].radius);
+	  break;
+	case 4:
+	  t_shadow = quadricIntersection(Ro_new,Rd_new,
+				  INPUT_FILE_DATA.js_objects[k].position,
+				  INPUT_FILE_DATA.js_objects[k].coeffs);
+	  break;
+	  // TODO: add case for light here
+	case 5:
+	  break;
+	default:
+	  message("Error","Unhandled typecode, camera/light/plane/sphere are supported");
+	}
+	
+	// need a new best_t here to determine if we are in shadow or not
+	if (t_shadow > 0 && t_shadow < best_t_shadow) {
+	  best_t_shadow = t_shadow;
+	  best_t_shadow_index = k;
+	}
+	if (best_t_shadow_index != 129) {
+	  // in a shadow, shade the pixel based on ambient light
+	  color_out[0] = getColor(object_color[0],ambient_color[0]);
+	  color_out[1] = getColor(object_color[1],ambient_color[1]);
+	  color_out[2] = getColor(object_color[2],ambient_color[2]);
+	} else { 
+	  // not in a shadow, shade the pixel based on light source
+	  // use N,L,R,V & fRad/fAng functions
+
+	  double N[3];
+	  double L[3];
+	  double R[3];
+	  double V[3];
+/*
+	  double* N;
+	  double* L;
+	  double* R;
+	  double* V;
+*/
+	  //N = normal of the object we are testing for shadows
+	  getObjectNormal(best_t_index,Ro_new,N);
+	  //L = the new vector to the light source from shadow test object
+	  L[0] = Rd_new[0];
+	  L[1] = Rd_new[1];
+	  L[2] = Rd_new[2];
+	  //V = original ray from camera to first object
+	  V[0] = Rd[0];
+	  V[1] = Rd[1];
+	  V[2] = Rd[2];
+	  //R = reflection of L about N: R = V - 2(N dot V)N
+	  /* TODO: fix this double* vs double argument issue, and also vScale does not return anything so create S
+	  R[0] = V[0] - 2*(vScale(N,(vDot(V,N)),S));
+	  R[1] = V[1] - 2*(vScale(N,(vDot(V,N)),S));
+	  R[2] = V[2] - 2*(vScale(N,(vDot(V,N)),S));
+	  */
+
+	  //ka, kd, ks (these are constants from the JSON file)
+
+	  // compute radial attenuation
+	  double dl; // distance from object to light
+	  double r_atten = fRad (LIGHT_OBJECTS.light_objects[j].radial_a0, 1, 1, dl); //params:(a2,a1,a0,dl)
+	  
+	  // compute the angular attenuation
+	  double a1 = 1; // TODO: "attenuation tweak", what is this?
+	  double a_atten = fAng (j, a1, V); // params: (index of the light on global lights array,a1,V)
+
+	  // compute the diffuse contribution
+	  //double Idiff (int o_index, int c_index, double* N, double* L);
+	  double diffuse[3];
+	  diffuse[0] = Idiff(k, 0, N, L);
+	  diffuse[1] = Idiff(k, 1, N, L);
+	  diffuse[2] = Idiff(k, 2, N, L);
+	  
+	  // compute the specular contribution
+	  //double Ispec (int o_index, int c_index, double* V, double* R, double* N, double* L, double ns);
+	  double specular[3];
+	  int ns = 1; // TODO: have no idea what this is
+	  specular[0] = Ispec(k, 0, V, R, N, L, ns);
+	  specular[1] = Ispec(k, 1, V, R, N, L, ns);
+	  specular[2] = Ispec(k, 2, V, R, N, L, ns);
+
+	  double tmp = color_out[0];
+	  color_out[0] += r_atten * a_atten * (diffuse[0] + specular[0]);
+	  if (DBG) printf("DBG co[0](%f): co(%f), r_a(%f), a_a(%f), d(%f), s(%f)\n"
+		 ,color_out[0],tmp,r_atten,a_atten,diffuse[0],specular[0]);
+	  color_out[1] += r_atten * a_atten * (diffuse[1] + specular[1]);
+	  color_out[2] += r_atten * a_atten * (diffuse[2] + specular[2]);
+	  
+	  /*
+	  color_out[0] = getColor(color_in[0],LIGHT_OBJECTS.light_objects[j].color[0]);
+	  color_out[1] = getColor(color_in[1],LIGHT_OBJECTS.light_objects[j].color[1]);
+	  color_out[2] = getColor(color_in[2],LIGHT_OBJECTS.light_objects[j].color[2]);
+	  */
+	}
+      }
     }
   } else {
+    // ray found no intersections, so simply pass the input color as output color
     color_out[0] = color_in[0];
     color_out[1] = color_in[1];
     color_out[2] = color_in[2];
@@ -1052,21 +1254,50 @@ void rayCast(double* Ro, double* Rd, double* color_in, double* color_out) {
 
 // helper function to convert 0 to 1 color scale into 0 to 255 color scale for PPM
 double getColor (double value1, double value2) {
+  double rval;
   if (value1 == DEFAULT_COLOR && value2 == DEFAULT_COLOR) {
     return DEFAULT_COLOR;
   } else if (value1 == DEFAULT_COLOR) {
     return value2;
   } else if (value2 == DEFAULT_COLOR) {
+    //return ((value1 + value2) / 2);
     return value1;
+    /*
+      if (diffuse) {
+      simply multiply the like color components assuming they are between 0 and 1 at this point, as
+      opposed to averaging them
+      } else if (specular) {
+      
+      }
+     */
   } else {
     // TODO fix this simple color blend
-    return ((value1 + value2) / 2);
+    rval = ((value1 + value2*9) / 10); // okay
+    //rval = value1 * value2;         // way too dark
+    //rval = ((value1 * 0.95) + (value2 * 0.1))/2; // still too dark, even trying to weight the terms 
+    //rval = (value1 * 0.25) + (value2 * 0.95);   // best so far
+    //if (DBG) printf("DBG: averaging %f and %f to %f\n",value1,value2,rval);
+    return rval;
   }
 }
 
+/*
+double getIllumination () {
+  // uLs is unit vector toward surface point from light source, ns is surfacen ormal
+  // c = color intensity from reflected ray, cL is color of light source
+  // the c's are light illumination, not color
+  if (point light) {
+    c = -(vDot(uLs,ns))cL; 
+  } else if (spot light) {
+    c = -(vDot(uLs,uL)^nL(vDot(uLs,ns))cL
+  }
+}
+*/
+
+
 // convert double color into int color value
 unsigned char convertColor (double color) {
-  if (color > 1.0) message("DBG","deal with color over 1.0");
+  if (color > 1.0) color = 1;
   return round(color * 255);
 }
 
@@ -1114,7 +1345,7 @@ double sphereIntersection(double* Ro, double* Rd, double* C, double r) {
 // arguments are: the ray (origin/direction), center of the plane, normal of the plane
 double planeIntersection(double* Ro, double* Rd, double* C, double* N) {
 
-  // if Vd = (Pn � Rd) = 0, no intersection, so compute it first and return if no intersection
+  // if Vd = (Pn dot Rd) = 0, no intersection, so compute it first and return if no intersection
   double Vd = vDot(N,Rd);
   if (Vd == 0) return -1;
 
@@ -1123,7 +1354,7 @@ double planeIntersection(double* Ro, double* Rd, double* C, double* N) {
   vSubtract(C,Ro,the_diff);
   double V0 = vDot(N,the_diff);
 
-  VERBOSE = 1; // DBG TODO remove
+  VERBOSE = 0; // DBG TODO remove
   //if (VERBOSE) printf("C0: %f, C1: %f, C2: %f\n",the_diff[0],the_diff[1],the_diff[2]);
 
   double t = V0 / Vd;
@@ -1310,3 +1541,202 @@ void checkJSON (JSON_object *object) {
   }
   if (INFO) message("Info","Done checking JSON for errors...");
 }
+
+// Helper function to get the closest object intersection along a ray
+double getIntersections (int index, double* Ro, double* Rd, double t_i) {
+  
+  switch(INPUT_FILE_DATA.js_objects[index].typecode) {
+  case 0: // skip the camera
+    break;
+  case 1:
+    t_i = sphereIntersection(Ro,Rd,
+			   INPUT_FILE_DATA.js_objects[index].position,
+			   INPUT_FILE_DATA.js_objects[index].radius);
+    break;
+  case 2:	
+    t_i = planeIntersection(Ro,Rd,
+			  INPUT_FILE_DATA.js_objects[index].position,
+			  INPUT_FILE_DATA.js_objects[index].normal);
+    break;
+  case 3:
+    t_i = cylinderIntersection(Ro,Rd,
+			     INPUT_FILE_DATA.js_objects[index].position,
+			     INPUT_FILE_DATA.js_objects[index].radius);
+    break;
+  case 4:
+    t_i = quadricIntersection(Ro,Rd,
+			    INPUT_FILE_DATA.js_objects[index].position,
+			    INPUT_FILE_DATA.js_objects[index].coeffs);
+    break;
+    // TODO: add case for light here
+  case 5:
+    break;
+  default:
+    message("Error","Unhandled typecode, camera/light/plane/sphere are supported");
+  }
+}
+ 
+// Helper to get populate the array of lights in the scene, will make shading easier to have this array
+void populateLightArray () {
+  if (INFO) message("Info","Populating array containing light objects...");
+  
+  // variables
+  int light_count = 0;
+
+  // populate the global array
+  for (int o = 0; o < INPUT_FILE_DATA.num_objects; o++) {
+    if (INPUT_FILE_DATA.js_objects[o].typecode == 5) {
+      LIGHT_OBJECTS.light_objects[light_count].color[0] = INPUT_FILE_DATA.js_objects[o].color[0];
+      LIGHT_OBJECTS.light_objects[light_count].color[1] = INPUT_FILE_DATA.js_objects[o].color[1];
+      LIGHT_OBJECTS.light_objects[light_count].color[2] = INPUT_FILE_DATA.js_objects[o].color[2];
+      LIGHT_OBJECTS.light_objects[light_count].position[0] = INPUT_FILE_DATA.js_objects[o].position[0];
+      LIGHT_OBJECTS.light_objects[light_count].position[1] = INPUT_FILE_DATA.js_objects[o].position[1];
+      LIGHT_OBJECTS.light_objects[light_count].position[2] = INPUT_FILE_DATA.js_objects[o].position[2];
+      LIGHT_OBJECTS.light_objects[light_count].direction[0] = INPUT_FILE_DATA.js_objects[o].direction[0];
+      LIGHT_OBJECTS.light_objects[light_count].direction[1] = INPUT_FILE_DATA.js_objects[o].direction[1];
+      LIGHT_OBJECTS.light_objects[light_count].direction[2] = INPUT_FILE_DATA.js_objects[o].direction[2];
+      LIGHT_OBJECTS.light_objects[light_count].radial_a0 = INPUT_FILE_DATA.js_objects[o].radial_a0;
+      LIGHT_OBJECTS.light_objects[light_count].radial_a1 = INPUT_FILE_DATA.js_objects[o].radial_a1;
+      LIGHT_OBJECTS.light_objects[light_count].radial_a2 = INPUT_FILE_DATA.js_objects[o].radial_a2;
+      LIGHT_OBJECTS.light_objects[light_count].angular_a0 = INPUT_FILE_DATA.js_objects[o].angular_a0;
+      light_count++;
+    }
+  }
+  LIGHT_OBJECTS.num_lights = light_count;
+  if (INFO) printf("Info: Done, found %d light objects\n",LIGHT_OBJECTS.num_lights);
+}
+
+void getObjectNormal (int index, double* Ro, double* N) {
+  // 0 = camera, 1 = sphere, 2 = plane, 3 = cylinder, 4 = quadric, 5 = light
+  if (INPUT_FILE_DATA.js_objects[index].typecode == 2) {
+    N[0] = INPUT_FILE_DATA.js_objects[index].normal[0];
+    N[1] = INPUT_FILE_DATA.js_objects[index].normal[1];
+    N[2] = INPUT_FILE_DATA.js_objects[index].normal[2];
+  } else if (INPUT_FILE_DATA.js_objects[index].typecode == 1) {
+    vSubtract(Ro,INPUT_FILE_DATA.js_objects[index].position,N);
+  } else if (INPUT_FILE_DATA.js_objects[index].typecode == 4) {
+    //TODO: quadric case
+  } else {
+    //TODO: error handling
+  }
+}
+
+// Angular attentuation function
+// params:
+//        - index (this is the index of the light object on the global JSON objects array)
+//                use the index as opposed to passing in all the parameter values for the light itself
+//        - a1    (this is the "attenuation tweak" constant
+//        - Vo    (this is the vector from the object to the light, reverse it to get Vo)
+double fAng (int index, double a1, double* V) {
+  double* Vl; // this is the vector from the spot in it's direction
+  double* Vo; // reverse the V vector
+  double alpha;
+  double theta;
+  
+  if (!LIGHT_OBJECTS.light_objects[index].angular_a0) { // not a spotlight
+    return 1.0;
+  } else if (alpha > theta) {
+    return 0;
+  } else {
+    return pow(vDot(Vo,Vl),a1); 
+  }
+}
+
+// Radial attenuation function
+// params:
+//        - a2
+//        - a1
+//        - a0  
+//        - dl  (this is the distance from the light to the object
+double fRad (double a2, double a1, double a0, double dl) {
+  //TODO clarify this a1, or 2 subscript 1 whatever that would be
+  if (dl == INFINITY) {
+    return 1;
+  } else {
+    return (1 / ( a2*sqr(dl) + a1*dl + a0)) ;
+  }
+}
+
+// Diffuse reflection funciton
+// params:
+//        - o_index   (of the object from global JSON objects)
+//        - c_index   (which color, R/G/B?)
+//        - N       (normal from the point on the object we are currently shading)
+//        - L       (vector to the light source)
+// I think Il is diffuse_color from JSON
+double Idiff (int o_index, int c_index, double* N, double* L) {
+
+  // variables
+  int Ka = 0; // Ka and Ia are just placeholders until ambient light is implemented
+  int Ia = 1;
+  int Kd = 1; // this is a placeholder for now
+  double rval; // helps with debug
+  // I think this is right
+  // TODO: handle the case where there is no diffuse color given in JSON
+  //double Il = INPUT_FILE_DATA.js_objects[o_index].diffuse_color[c_index];
+  double Il = INPUT_FILE_DATA.js_objects[o_index].color[c_index];
+
+  // calculations
+  double NdotL = vDot(N,L);
+  //TODO fix hack_num
+  double hack_num = 1 / (1 - NdotL);
+
+  if (NdotL > 0) {
+    //    rval = Ka*Ia + Kd*Il*NdotL;
+    rval = Ka*Ia + Kd*Il*hack_num;
+  } else {
+    rval = Ka*Ia;
+  }
+  //  if (DBG) printf("DBG Idiff(%f): o_i(%d), c_i(%d), Il(%f), NdL(%f), N[%f,%f,%f], L[%f,%f,%f]\n",rval,o_index,c_index,Il,NdotL,N[0],N[1],N[2],L[0],L[1],L[2]);
+    if (DBG) printf("DBG Idiff(%f): o_i(%d), c_i(%d), Il(%f), NdL(%f), N[%f,%f,%f], L[%f,%f,%f]\n",rval,o_index,c_index,Il,hack_num,N[0],N[1],N[2],L[0],L[1],L[2]);
+  return rval;
+}
+
+// Specular reflection funciton
+double Ispec (int o_index, int c_index, double* V, double* R, double* N, double* L, double ns) {
+  // variables
+  int Ks = 1; // placeholder
+  // TODO: handle the case where there is no specular color given
+  //double Il = INPUT_FILE_DATA.js_objects[o_index].specular_color[c_index];
+  double Il = INPUT_FILE_DATA.js_objects[o_index].color[c_index];
+
+  // calculations
+  double VdotR = vDot(V,R);
+  double NdotL = vDot(N,L);
+
+  if (VdotR > 0 && NdotL > 0) {
+    return Ks*Il*pow(VdotR,ns);
+  } else {
+    return 0;
+  }
+}
+
+/* Notes from Class on 10/11/16
+// also, remember you need to clamp the distance to not go beyond the light's distance to object beyond it
+
+// now, the summation of all the lights in the scene
+for (int j = 0; j < LIGHT_OBJECTS.num_lights; j++) {
+// first thing is a shadow test, we don't add in contribution from the light if in shadow
+// before we apply illumination from a light, can we see that light source?
+// use 3d math functions on these by the way
+Ronew = closest_t * Rd + Ro; 
+Rdnew = light_position_vector - Ronew;
+for (int k = 0; all_objects ;k++) { 
+if (object[k] == closest object) continue; // I already keep track of best_t_index so I've got this
+test_for_intersections ( we should put this in it's own function since it's called multiple times )
+}
+// need a new best_t here to determine if we are in shadow or not (probably NULL, or my 129, whatever)
+if (closest_shadow_object == NULL) {
+// N,L,R,V & frad/fang functions
+N = closest_object->normal; //plane
+N = Ronew - closest_object->center; //sphere
+L = Rdnew // direction from the light, used in calculating the attenuation, not incedent light
+R = reflection of L;
+V = Rd; // ray from the camera to the object
+ka, kd, ks (these are constants from the JSON file)
+diffuse = ...;
+specular = ...;
+color[0] += frad() * fang() * (diffuse + specular); // for r/g/b
+}
+// color has now been calculated, put it into the pixel buffer
+*/

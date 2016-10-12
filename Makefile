@@ -1,6 +1,5 @@
 #############################################
-# Simple makefile for execution of project2
-# set path = ($path /cygdrive/c/cygwin64/bin)
+# Simple makefile for execution of project3
 #############################################
 all: raycast.c
 	gcc raycast.c -o raycast
@@ -31,14 +30,29 @@ cone:
 # targets for testing good and bad json files
 #############################################
 testgood.%:
+#	ifeq ($(wildcard("test.ppm")),)
+#		echo "it's there"
+#	endif
 #	rm test.ppm
+#	fi
 	gcc raycast.c -o raycast
-	./raycast 600 600 test_good_$*.json test.ppm
-	emacs test.ppm
+	./raycast 1000 800 test_good_$*.json test.ppm
+	emacs -geometry 120x60 test.ppm
 
 testbad.%:
 	gcc raycast.c -o raycast
 	./raycast 600 600 test_bad_$*.json test.ppm
+
+testall:
+	make testgood.00
+	make testgood.01
+	make testgood.02
+	make testgood.03
+	make testgood.04
+	make testgood.05
+	make testgood.06
+	make testgood.07
+	make testgood.08
 
 #############################################
 # targets for simple test configs
@@ -75,6 +89,11 @@ test6:
 	gcc raycast.c -o raycast
 	./raycast 1000 800 test_good_06.json test.ppm
 	emacs -geometry 200x60 test.ppm
+
+test9:
+	gcc raycast.c -o raycast
+	./raycast 120 100 test_good_09.json test.ppm
+	emacs -geometry 160x60 test.ppm
 
 testexample:
 	gcc raycast.c -o raycast
