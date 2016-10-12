@@ -1172,26 +1172,28 @@ void rayCast(double* Ro, double* Rd, double* color_in, double* color_out) {
 */
 	  //N = normal of the object we are testing for shadows
 	  getObjectNormal(best_t_index,Ro_new,N);
-	  vNormalize(N);
 	  //L = the new vector to the light source from shadow test object
 	  L[0] = Rd_new[0];
 	  L[1] = Rd_new[1];
 	  L[2] = Rd_new[2];
-	  vNormalize(L);
 	  //V = original ray from camera to first object
 	  V[0] = Rd[0];
 	  V[1] = Rd[1];
 	  V[2] = Rd[2];
 	  //R = reflection of L about N: R = V - 2(N dot V)N
-	  /* TODO: fix this double* vs double argument issue, and also vScale does not return anything so create S
-	  R[0] = V[0] - 2*(vScale(N,(vDot(V,N)),S));
-	  R[1] = V[1] - 2*(vScale(N,(vDot(V,N)),S));
-	  R[2] = V[2] - 2*(vScale(N,(vDot(V,N)),S));
-	  */
+	  double VdotN = vDot(V,N);
+	  VdotN *= 2;
+	  double S[3];
+	  vScale(N,(VdotN),S);
+	  R[0] = V[0] - S[0];
+	  R[1] = V[1] - S[1];
+	  R[2] = V[2] - S[2];
 
-	  //ka, kd, ks (these are constants from the JSON file)
+	  //ka, kd, ks (these are constants from the JSON file)??
 
 	  // compute radial attenuation
+	  vNormalize(N);
+	  vNormalize(L);
 	  double dl = pDistance(light_position,Ro_new); // distance from object to light
 	  dl *= .1; // TODO remove this after fRad coeffs are understood
 	  double r_atten = fRad (LIGHT_OBJECTS.light_objects[j].radial_a0, 1, 1, dl); //params:(a2,a1,a0,dl)
@@ -1211,6 +1213,8 @@ void rayCast(double* Ro, double* Rd, double* color_in, double* color_out) {
 	  //double Ispec (int o_index, int c_index, double* V, double* R, double* N, double* L, double ns);
 	  double specular[3];
 	  int ns = 1; // TODO: have no idea what this is
+	  vNormalize(V);
+	  vNormalize(R);
 	  specular[0] = Ispec(k, 0, V, R, N, L, ns);
 	  specular[1] = Ispec(k, 1, V, R, N, L, ns);
 	  specular[2] = Ispec(k, 2, V, R, N, L, ns);
