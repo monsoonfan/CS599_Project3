@@ -26,6 +26,7 @@ Questions:
   make the numbers work? Get some very strange patterns (like speckles) without massaging them...
 - fRad a2,a1,a0 coefficients
 -  Wait a minute, isn't the specular Il the color of the light??
+- R calculation correct?
 
 - C question - what if I create some var 'double* var;', then malloc it way later, and OS used memory adjacent var??
 ---------------------------------------------------------------------------------------
@@ -1088,6 +1089,8 @@ void rayCast(double* Ro, double* Rd, double* color_in, double* color_out) {
     int    best_t_shadow_index = 129; // then maintain this throughout code
     double best_t_shadow = INFINITY;
 
+    if (DBG) printf("DBG rC (%s)[%d]\n",INPUT_FILE_DATA.js_objects[best_t_index].type,best_t_index);
+
     // now, the summation of all the lights in the scene
     for (int j = 0; j < LIGHT_OBJECTS.num_lights; j++) {
       // shadow test for each light, first create new Ro for the shadow test
@@ -1106,7 +1109,8 @@ void rayCast(double* Ro, double* Rd, double* color_in, double* color_out) {
       
       // now iterate over each object in the design and check for intersection, indicating a shadow
       for (int k = 0; k < INPUT_FILE_DATA.num_objects ; k++) { 
-	// skip lights, won't have intersections
+	// skip lights and cameras, won't have intersections
+	if (INPUT_FILE_DATA.js_objects[k].typecode == 0) continue;
 	if (INPUT_FILE_DATA.js_objects[k].typecode == 5) continue;
 	
 	// how to deal with the object we are checking from itself, could shadow parts of itself from the light
@@ -1160,17 +1164,11 @@ void rayCast(double* Ro, double* Rd, double* color_in, double* color_out) {
 	} else { 
 	  // not in a shadow, shade the pixel based on light source
 	  // use N,L,R,V & fRad/fAng functions
-
 	  double N[3];
 	  double L[3];
 	  double R[3];
 	  double V[3];
-/*
-	  double* N;
-	  double* L;
-	  double* R;
-	  double* V;
-*/
+
 	  //N = normal of the object we are testing for shadows
 	  getObjectNormal(best_t_index,Ro_new,N);
 	  //L = the new vector to the light source from shadow test object
@@ -1184,7 +1182,7 @@ void rayCast(double* Ro, double* Rd, double* color_in, double* color_out) {
 	  //R = reflection of L about N: R = V - 2(N dot V)N
 	  double VdotN = vDot(V,N);
 	  VdotN *= 2;
-	  double S[3];
+	  double S[3]; // scaled vector
 	  vScale(N,(VdotN),S);
 	  R[0] = V[0] - S[0];
 	  R[1] = V[1] - S[1];
@@ -1196,8 +1194,8 @@ void rayCast(double* Ro, double* Rd, double* color_in, double* color_out) {
 	  vNormalize(N);
 	  vNormalize(L);
 	  double dl = pDistance(light_position,Ro_new); // distance from object to light
-	  dl *= .1; // TODO remove this after fRad coeffs are understood
-	  double r_atten = fRad (LIGHT_OBJECTS.light_objects[j].radial_a0, 1, 1, dl); //params:(a2,a1,a0,dl)
+	  dl *= .05; // TODO remove this after fRad coeffs are understood
+	  double r_atten = fRad(LIGHT_OBJECTS.light_objects[j].radial_a0, 1, 1, dl); //params:(a2,a1,a0,dl)
 	  
 	  // compute the angular attenuation
 	  double a1 = 1; // TODO: "attenuation tweak", what is this?
@@ -1205,36 +1203,33 @@ void rayCast(double* Ro, double* Rd, double* color_in, double* color_out) {
 
 	  // compute the diffuse contribution
 	  double diffuse[3];
-	  diffuse[0] = Idiff(k, 0, N, L);
-	  diffuse[1] = Idiff(k, 1, N, L);
-	  diffuse[2] = Idiff(k, 2, N, L);
+	  diffuse[0] = Idiff(best_t_index, 0, N, L);
+	  diffuse[1] = Idiff(best_t_index, 1, N, L);
+	  diffuse[2] = Idiff(best_t_index, 2, N, L);
 	  
 	  // compute the specular contribution
 	  double specular[3];
 	  int ns = 2; // TODO: have no idea what this is
 	  vNormalize(V);
 	  vNormalize(R);
-	  specular[0] = Ispec(k, 0, V, R, N, L, ns);
-	  specular[1] = Ispec(k, 1, V, R, N, L, ns);
-	  specular[2] = Ispec(k, 2, V, R, N, L, ns);
-	  /*
-	  specular[0] = Ispec(j, 0, V, R, N, L, ns);
-	  specular[1] = Ispec(j, 1, V, R, N, L, ns);
-	  specular[2] = Ispec(j, 2, V, R, N, L, ns);
-	  */
+	  specular[0] = Ispec(best_t_index, 0, V, R, N, L, ns);
+	  specular[1] = Ispec(best_t_index, 1, V, R, N, L, ns);
+	  specular[2] = Ispec(best_t_index, 2, V, R, N, L, ns);
 
-	  double tmp = color_out[0]; // for the DBG statement
+	  // Now, use the big equation to calculate the color for each pixel
+	  double tmp0 = color_out[0]; // for the DBG statement
+	  double tmp1 = color_out[1]; // for the DBG statement
+	  double tmp2 = color_out[2]; // for the DBG statement
 	  color_out[0] += r_atten * a_atten * (diffuse[0] + specular[0]);
-	  if (DBG) printf("DBG co[0](%f): co(%f), r_a(%f), a_a(%f), d(%f), s(%f)\n"
-		 ,color_out[0],tmp,r_atten,a_atten,diffuse[0],specular[0]);
 	  color_out[1] += r_atten * a_atten * (diffuse[1] + specular[1]);
 	  color_out[2] += r_atten * a_atten * (diffuse[2] + specular[2]);
-	  
-	  /*
-	  color_out[0] = getColor(color_in[0],LIGHT_OBJECTS.light_objects[j].color[0]);
-	  color_out[1] = getColor(color_in[1],LIGHT_OBJECTS.light_objects[j].color[1]);
-	  color_out[2] = getColor(color_in[2],LIGHT_OBJECTS.light_objects[j].color[2]);
-	  */
+
+	  if (DBG) printf("DBG co[0](%f): co(%f), r_a(%f), a_a(%f), d(%f), s(%f)\n"
+		 ,color_out[0],tmp0,r_atten,a_atten,diffuse[0],specular[0]);
+	  if (DBG) printf("DBG co[1](%f): co(%f), r_a(%f), a_a(%f), d(%f), s(%f)\n"
+		 ,color_out[1],tmp1,r_atten,a_atten,diffuse[1],specular[1]);
+	  if (DBG) printf("DBG co[2](%f): co(%f), r_a(%f), a_a(%f), d(%f), s(%f)\n"
+		 ,color_out[2],tmp2,r_atten,a_atten,diffuse[2],specular[2]);
 	}
       }
     }
@@ -1667,8 +1662,12 @@ double Idiff (int o_index, int c_index, double* N, double* L) {
   double rval; // helps with debug
   // I think this is right, that Il is the diffuse color of the object
   // TODO: handle the case where there is no diffuse color given in JSON
-  //double Il = INPUT_FILE_DATA.js_objects[o_index].diffuse_color[c_index];
-  double Il = INPUT_FILE_DATA.js_objects[o_index].color[c_index];
+  double Il;
+  if (INPUT_FILE_DATA.js_objects[o_index].flags.has_diffuse_color) {
+    Il = INPUT_FILE_DATA.js_objects[o_index].diffuse_color[c_index];
+  } else {
+    Il = INPUT_FILE_DATA.js_objects[o_index].color[c_index];
+  }
 
   // calculations
   double NdotL = vDot(N,L);
@@ -1678,7 +1677,7 @@ double Idiff (int o_index, int c_index, double* N, double* L) {
   } else {
     rval = Ka*Ia;
   }
-  //  if (DBG) printf("DBG Idiff(%f): o_i(%d), c_i(%d), Il(%f), NdL(%f), N[%f,%f,%f], L[%f,%f,%f]\n",rval,o_index,c_index,Il,NdotL,N[0],N[1],N[2],L[0],L[1],L[2]);
+  if (DBG) printf("DBG Idiff(%f): o_i(%d), c_i(%d), Il(%f), NdL(%f), N[%f,%f,%f], L[%f,%f,%f]\n",rval,o_index,c_index,Il,NdotL,N[0],N[1],N[2],L[0],L[1],L[2]);
   return rval;
 }
 
@@ -1710,8 +1709,8 @@ double Ispec (int o_index, int c_index, double* V, double* R, double* N, double*
     rval = 0;
   }
   if (DBG) printf("DBG Ispec(%f): o_i(%d), c_i(%d), Il(%f), VdR(%f), NdL(%f), N[%f,%f,%f], L[%f,%f,%f]\n",rval,o_index,c_index,Il,VdotR,NdotL,N[0],N[1],N[2],L[0],L[1],L[2]);
-  //return rval;
-  return 0;
+  return rval;
+  //return 0;
 }
 
 /* Notes from Class on 10/11/16
