@@ -25,6 +25,7 @@ Questions:
 - actually, we can't just skip an object itself, what about sphere's dark side shades itself from light? So, how to
   make the numbers work? Get some very strange patterns (like speckles) without massaging them...
 - fRad a2,a1,a0 coefficients
+-  Wait a minute, isn't the specular Il the color of the light??
 
 - C question - what if I create some var 'double* var;', then malloc it way later, and OS used memory adjacent var??
 ---------------------------------------------------------------------------------------
@@ -200,7 +201,7 @@ int VERBOSE             = 0; // controls logfile message level
 int INFO                = 1; // controls if Info messages are printed, turn off prior to submission
 int DBG                 = 0; // turns on the current set of DBG statements, whatever they are
 
-double ambient_color[3] = {0.1,0.1,0.1}; // HACK: define these until ambient color from JSON supported
+double ambient_color[3] = {0.05,0.05,0.05}; // HACK: define these until ambient color from JSON supported
 
 // global data structures
 JSON_file_struct    INPUT_FILE_DATA;
@@ -1203,21 +1204,24 @@ void rayCast(double* Ro, double* Rd, double* color_in, double* color_out) {
 	  double a_atten = fAng (j, a1, V); // params: (index of the light on global lights array,a1,V)
 
 	  // compute the diffuse contribution
-	  //double Idiff (int o_index, int c_index, double* N, double* L);
 	  double diffuse[3];
 	  diffuse[0] = Idiff(k, 0, N, L);
 	  diffuse[1] = Idiff(k, 1, N, L);
 	  diffuse[2] = Idiff(k, 2, N, L);
 	  
 	  // compute the specular contribution
-	  //double Ispec (int o_index, int c_index, double* V, double* R, double* N, double* L, double ns);
 	  double specular[3];
-	  int ns = 1; // TODO: have no idea what this is
+	  int ns = 2; // TODO: have no idea what this is
 	  vNormalize(V);
 	  vNormalize(R);
 	  specular[0] = Ispec(k, 0, V, R, N, L, ns);
 	  specular[1] = Ispec(k, 1, V, R, N, L, ns);
 	  specular[2] = Ispec(k, 2, V, R, N, L, ns);
+	  /*
+	  specular[0] = Ispec(j, 0, V, R, N, L, ns);
+	  specular[1] = Ispec(j, 1, V, R, N, L, ns);
+	  specular[2] = Ispec(j, 2, V, R, N, L, ns);
+	  */
 
 	  double tmp = color_out[0]; // for the DBG statement
 	  color_out[0] += r_atten * a_atten * (diffuse[0] + specular[0]);
@@ -1679,22 +1683,35 @@ double Idiff (int o_index, int c_index, double* N, double* L) {
 }
 
 // Specular reflection funciton
+// specular[0] = Ispec(k, 0, V, R, N, L, ns);
 double Ispec (int o_index, int c_index, double* V, double* R, double* N, double* L, double ns) {
   // variables
   int Ks = 1; // placeholder
+  double rval; // for DBG
+  double Il;
   // TODO: handle the case where there is no specular color given
-  //double Il = INPUT_FILE_DATA.js_objects[o_index].specular_color[c_index];
-  double Il = INPUT_FILE_DATA.js_objects[o_index].color[c_index];
+  // Wait a minute, isn't the specular Il the color of the light??
+  if (INPUT_FILE_DATA.js_objects[o_index].flags.has_specular_color) {
+    Il = INPUT_FILE_DATA.js_objects[o_index].specular_color[c_index];
+  } else {
+    Il = INPUT_FILE_DATA.js_objects[o_index].color[c_index];
+    //    Il = 1.0;
+  }
+  //double Il = INPUT_FILE_DATA.js_objects[o_index].color[c_index];
+  //double Il = LIGHT_OBJECTS.light_objects[o_index].color[c_index];
 
   // calculations
   double VdotR = vDot(V,R);
   double NdotL = vDot(N,L);
 
   if (VdotR > 0 && NdotL > 0) {
-    return Ks*Il*pow(VdotR,ns);
+    rval = Ks*Il*pow(VdotR,ns);
   } else {
-    return 0;
+    rval = 0;
   }
+  if (DBG) printf("DBG Ispec(%f): o_i(%d), c_i(%d), Il(%f), VdR(%f), NdL(%f), N[%f,%f,%f], L[%f,%f,%f]\n",rval,o_index,c_index,Il,VdotR,NdotL,N[0],N[1],N[2],L[0],L[1],L[2]);
+  //return rval;
+  return 0;
 }
 
 /* Notes from Class on 10/11/16

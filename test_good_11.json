@@ -18,7 +18,8 @@
 },
 {
 "type": "sphere",
-"color": [1.0, 0.0, 0.0],
+"diffuse_color": [1.0, 0.0, 0.0],
+"specular_color": [1.0, 1.0, 1.0],
     "position": [2, -2, 30],
     "radius": 5
     
