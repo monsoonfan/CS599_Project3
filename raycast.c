@@ -20,15 +20,6 @@ Issues:
 
 Questions:
 ---------
-- how does c = -(vDot(uLs,ns))cL;  relate to the color of the object the light is reflecting off of?
-- what is the format for ambient lights in JSON, I want to do it in this project, (or just #define the ambient light
-- actually, we can't just skip an object itself, what about sphere's dark side shades itself from light? So, how to
-  make the numbers work? Get some very strange patterns (like speckles) without massaging them...
-- fRad a2,a1,a0 coefficients
--  Wait a minute, isn't the specular Il the color of the light??
-- R calculation correct?
-
-- C question - what if I create some var 'double* var;', then malloc it way later, and OS used memory adjacent var??
 ---------------------------------------------------------------------------------------
 */
 #include <stdio.h>
@@ -238,8 +229,8 @@ unsigned char convertColor (double color);
 
 double fAng (int index, double a1, double* V);
 double fRad (double a2, double a1, double a0, double dl);
-double Idiff (int o_index, int c_index, double* N, double* L);
-double Ispec (int o_index, int c_index, double* V, double* R, double* N, double* L, double ns);
+double Idiff (int o_index, int l_index, int c_index, double* N, double* L);
+double Ispec (int o_index, int l_index, int c_index, double* V, double* R, double* N, double* L, double ns);
 
 void  help();
 int   computeDepth();
@@ -1075,7 +1066,6 @@ void rayCast(double* Ro, double* Rd, double* color_in, double* color_out) {
       object_color[1] = INPUT_FILE_DATA.js_objects[o].color[1];
       object_color[2] = INPUT_FILE_DATA.js_objects[o].color[2];
     }
-    // if (DBG) printf("DBG t = %f for index %d, b_t: (%f), b_t_i: (%f)\n",t,o,best_t,best_t_index);
   }
 
   // Now look at the t value and see if there was an intersection
@@ -1099,15 +1089,16 @@ void rayCast(double* Ro, double* Rd, double* color_in, double* color_out) {
       vScale(Rd,best_t,Ro_tmp);
       vAdd(Ro,Ro_tmp,Ro_new);
       
-      // next, create new Rd for the shadow test
+      // next, create new Rd for the shadow test and calculate distance to the light object
       double Rd_new[3];
       double light_position[3];
       light_position[0] = LIGHT_OBJECTS.light_objects[j].position[0];
       light_position[1] = LIGHT_OBJECTS.light_objects[j].position[1];
       light_position[2] = LIGHT_OBJECTS.light_objects[j].position[2];
       vSubtract(light_position,Ro_new,Rd_new);
+      double dl = pDistance(light_position,Ro_new); // distance from object to light
       
-      // now iterate over each object in the design and check for intersection, indicating a shadow
+      // now iterate over each object in the scene and check for intersection, indicating a shadow
       for (int k = 0; k < INPUT_FILE_DATA.num_objects ; k++) { 
 	// skip lights and cameras, won't have intersections
 	if (INPUT_FILE_DATA.js_objects[k].typecode == 0) continue;
@@ -1115,9 +1106,6 @@ void rayCast(double* Ro, double* Rd, double* color_in, double* color_out) {
 	
 	// how to deal with the object we are checking from itself, could shadow parts of itself from the light
 	if (k == best_t_index) continue;
-
-	// also, remember you need to clamp the distance to not go beyond the light's distance to object beyond it
-	if (0) continue;
 
 	// test for intersections to find shadows
 	// TODO: use functionized code instead of this copy/paste hack
@@ -1156,6 +1144,11 @@ void rayCast(double* Ro, double* Rd, double* color_in, double* color_out) {
 	  best_t_shadow = t_shadow;
 	  best_t_shadow_index = k;
 	}
+
+	// remember you need to clamp the distance to not go beyond the light's distance to any object beyond it
+	// it's not this simple, you can have objects farther than the light in a diff direction
+	//if (best_t_shadow > dl) continue;
+
 	if (best_t_shadow_index != 129) {
 	  // in a shadow, shade the pixel based on ambient light
 	  color_out[0] = getColor(object_color[0],ambient_color[0]);
@@ -1179,42 +1172,40 @@ void rayCast(double* Ro, double* Rd, double* color_in, double* color_out) {
 	  V[0] = Rd[0];
 	  V[1] = Rd[1];
 	  V[2] = Rd[2];
-	  //R = reflection of L about N: R = V - 2(N dot V)N
-	  double VdotN = vDot(V,N);
-	  VdotN *= 2;
+	  //R = reflection of L about N: R = L - 2(N dot L)N
+	  double LdotN = vDot(L,N);
+	  LdotN *= 2;
 	  double S[3]; // scaled vector
-	  vScale(N,(VdotN),S);
-	  R[0] = V[0] - S[0];
-	  R[1] = V[1] - S[1];
-	  R[2] = V[2] - S[2];
-
-	  //ka, kd, ks (these are constants from the JSON file)??
+	  vScale(N,LdotN,S);
+	  R[0] = L[0] - S[0];
+	  R[1] = L[1] - S[1];
+	  R[2] = L[2] - S[2];
 
 	  // compute radial attenuation
 	  vNormalize(N);
 	  vNormalize(L);
 	  double dl = pDistance(light_position,Ro_new); // distance from object to light
-	  dl *= .05; // TODO remove this after fRad coeffs are understood
+	  dl *= .05; // TODO fix parser to handle a1/a0 terms from JSOn for point lights
 	  double r_atten = fRad(LIGHT_OBJECTS.light_objects[j].radial_a0, 1, 1, dl); //params:(a2,a1,a0,dl)
 	  
 	  // compute the angular attenuation
 	  double a1 = 1; // TODO: "attenuation tweak", what is this?
-	  double a_atten = fAng (j, a1, V); // params: (index of the light on global lights array,a1,V)
+	  double a_atten = fAng (j, a1, L); // params: (index of the light on global lights array,a1,L)
 
 	  // compute the diffuse contribution
 	  double diffuse[3];
-	  diffuse[0] = Idiff(best_t_index, 0, N, L);
-	  diffuse[1] = Idiff(best_t_index, 1, N, L);
-	  diffuse[2] = Idiff(best_t_index, 2, N, L);
+	  diffuse[0] = Idiff(best_t_index, j, 0, N, L);
+	  diffuse[1] = Idiff(best_t_index, j, 1, N, L);
+	  diffuse[2] = Idiff(best_t_index, j, 2, N, L);
 	  
 	  // compute the specular contribution
 	  double specular[3];
-	  int ns = 2; // TODO: have no idea what this is
+	  int ns = 10;
 	  vNormalize(V);
 	  vNormalize(R);
-	  specular[0] = Ispec(best_t_index, 0, V, R, N, L, ns);
-	  specular[1] = Ispec(best_t_index, 1, V, R, N, L, ns);
-	  specular[2] = Ispec(best_t_index, 2, V, R, N, L, ns);
+	  specular[0] = Ispec(best_t_index, j, 0, V, R, N, L, ns);
+	  specular[1] = Ispec(best_t_index, j, 1, V, R, N, L, ns);
+	  specular[2] = Ispec(best_t_index, j, 2, V, R, N, L, ns);
 
 	  // Now, use the big equation to calculate the color for each pixel
 	  double tmp0 = color_out[0]; // for the DBG statement
@@ -1649,23 +1640,26 @@ double fRad (double a2, double a1, double a0, double dl) {
 // Diffuse reflection funciton
 // params:
 //        - o_index   (of the object from global JSON objects)
+//        - l_index   (of the light we are being illuminated from)
 //        - c_index   (which color, R/G/B?)
 //        - N       (normal from the point on the object we are currently shading)
 //        - L       (vector to the light source)
 // I think Il is diffuse_color from JSON
-double Idiff (int o_index, int c_index, double* N, double* L) {
+double Idiff (int o_index, int l_index, int c_index, double* N, double* L) {
 
   // variables
   int Ka = 0; // Ka and Ia are just placeholders until ambient light is implemented
   int Ia = 1;
-  int Kd = 1; // this is a placeholder for now
-  double rval; // helps with debug
-  // I think this is right, that Il is the diffuse color of the object
-  // TODO: handle the case where there is no diffuse color given in JSON
+  double Kd = 1;
+  //  double Il = LIGHT_OBJECTS.light_objects[l_index].color[c_index];
   double Il;
+  double rval; // helps with debug
+
   if (INPUT_FILE_DATA.js_objects[o_index].flags.has_diffuse_color) {
+    //    Kd = INPUT_FILE_DATA.js_objects[o_index].diffuse_color[c_index];
     Il = INPUT_FILE_DATA.js_objects[o_index].diffuse_color[c_index];
   } else {
+    //    Kd = INPUT_FILE_DATA.js_objects[o_index].color[c_index];
     Il = INPUT_FILE_DATA.js_objects[o_index].color[c_index];
   }
 
@@ -1677,27 +1671,23 @@ double Idiff (int o_index, int c_index, double* N, double* L) {
   } else {
     rval = Ka*Ia;
   }
-  if (DBG) printf("DBG Idiff(%f): o_i(%d), c_i(%d), Il(%f), NdL(%f), N[%f,%f,%f], L[%f,%f,%f]\n",rval,o_index,c_index,Il,NdotL,N[0],N[1],N[2],L[0],L[1],L[2]);
+  //if (DBG) printf("DBG Idiff(%f): o_i(%d), c_i(%d), Il(%f), NdL(%f), N[%f,%f,%f], L[%f,%f,%f]\n",rval,o_index,c_index,Il,NdotL,N[0],N[1],N[2],L[0],L[1],L[2]);
   return rval;
 }
 
 // Specular reflection funciton
 // specular[0] = Ispec(k, 0, V, R, N, L, ns);
-double Ispec (int o_index, int c_index, double* V, double* R, double* N, double* L, double ns) {
+double Ispec (int o_index, int l_index, int c_index, double* V, double* R, double* N, double* L, double ns) {
   // variables
-  int Ks = 1; // placeholder
+  double Ks;
   double rval; // for DBG
-  double Il;
-  // TODO: handle the case where there is no specular color given
-  // Wait a minute, isn't the specular Il the color of the light??
+  double Il = LIGHT_OBJECTS.light_objects[l_index].color[c_index];
+
   if (INPUT_FILE_DATA.js_objects[o_index].flags.has_specular_color) {
-    Il = INPUT_FILE_DATA.js_objects[o_index].specular_color[c_index];
+    Ks = INPUT_FILE_DATA.js_objects[o_index].specular_color[c_index];
   } else {
-    Il = INPUT_FILE_DATA.js_objects[o_index].color[c_index];
-    //    Il = 1.0;
+    Ks = INPUT_FILE_DATA.js_objects[o_index].color[c_index];
   }
-  //double Il = INPUT_FILE_DATA.js_objects[o_index].color[c_index];
-  //double Il = LIGHT_OBJECTS.light_objects[o_index].color[c_index];
 
   // calculations
   double VdotR = vDot(V,R);
@@ -1708,37 +1698,30 @@ double Ispec (int o_index, int c_index, double* V, double* R, double* N, double*
   } else {
     rval = 0;
   }
-  if (DBG) printf("DBG Ispec(%f): o_i(%d), c_i(%d), Il(%f), VdR(%f), NdL(%f), N[%f,%f,%f], L[%f,%f,%f]\n",rval,o_index,c_index,Il,VdotR,NdotL,N[0],N[1],N[2],L[0],L[1],L[2]);
+  if (DBG) printf("DBG Ispec(%f): o_i(%d), c_i(%d), Il(%f), VdR(%f), NdL(%f), V[%f,%f,%f], R[%f,%f,%f], \nN[%f,%f,%f], L[%f,%f,%f]\n",rval,o_index,c_index,Il,VdotR,NdotL,V[0],V[1],V[2],R[0],R[1],R[2],N[0],N[1],N[2],L[0],L[1],L[2]);
   return rval;
-  //return 0;
 }
 
-/* Notes from Class on 10/11/16
-// also, remember you need to clamp the distance to not go beyond the light's distance to object beyond it
+double testScale () {
+  // alot of nan in real data
+  double N[3] = {0,1,0};
+  double L[3] = {-1,1,0};
+  double V[3] = {2,1,0};
+  double R[3];
 
-// now, the summation of all the lights in the scene
-for (int j = 0; j < LIGHT_OBJECTS.num_lights; j++) {
-// first thing is a shadow test, we don't add in contribution from the light if in shadow
-// before we apply illumination from a light, can we see that light source?
-// use 3d math functions on these by the way
-Ronew = closest_t * Rd + Ro; 
-Rdnew = light_position_vector - Ronew;
-for (int k = 0; all_objects ;k++) { 
-if (object[k] == closest object) continue; // I already keep track of best_t_index so I've got this
-test_for_intersections ( we should put this in it's own function since it's called multiple times )
+  //R = reflection of L about N: R = V - 2(N dot V)N
+  double LdotN = vDot(L,N);
+  LdotN *= 2;
+  double S[3]; // scaled vector
+  vScale(N, LdotN, S);
+  R[0] = L[0] - S[0];
+  R[1] = L[1] - S[1];
+  R[2] = L[2] - S[2];
+
+  printf("L = [%f,%f,%f]\n",L[0],L[1],L[2]);
+  printf("V = [%f,%f,%f]\n",V[0],V[1],V[2]);
+  printf("N = [%f,%f,%f]\n",N[0],N[1],N[2]);
+  printf("S = [%f,%f,%f]\n",S[0],S[1],S[2]);
+  printf("LdotN: %f\n",LdotN);
+  printf("R = [%f,%f,%f]\n",R[0],R[1],R[2]);
 }
-// need a new best_t here to determine if we are in shadow or not (probably NULL, or my 129, whatever)
-if (closest_shadow_object == NULL) {
-// N,L,R,V & frad/fang functions
-N = closest_object->normal; //plane
-N = Ronew - closest_object->center; //sphere
-L = Rdnew // direction from the light, used in calculating the attenuation, not incedent light
-R = reflection of L;
-V = Rd; // ray from the camera to the object
-ka, kd, ks (these are constants from the JSON file)
-diffuse = ...;
-specular = ...;
-color[0] += frad() * fang() * (diffuse + specular); // for r/g/b
-}
-// color has now been calculated, put it into the pixel buffer
-*/
