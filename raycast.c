@@ -20,6 +20,8 @@ Issues:
 
 Questions:
 ---------
+3) Why do we multiply by 2 in the reflection equation? It doesn't make sense to me. It basically bends the reflection:
+    Vr = V - 2(n dot v)*n
 ---------------------------------------------------------------------------------------
 */
 #include <stdio.h>
@@ -242,6 +244,7 @@ double getCameraWidth();
 double getCameraHeight();
 void   populateLightArray ();
 
+double testScale ();
 
 /* 
  ------------------------------------------------------------------
@@ -572,6 +575,9 @@ int main(int argc, char *argv[]) {
 
   // write the image
   writePPM(outfile,&OUTPUT_FILE_DATA);
+
+  // TODO DBG remove
+  testScale();
   
   // prepare to exit
   freeGlobalMemory();
@@ -1200,7 +1206,7 @@ void rayCast(double* Ro, double* Rd, double* color_in, double* color_out) {
 	  
 	  // compute the specular contribution
 	  double specular[3];
-	  int ns = 10;
+	  int ns = 20;
 	  vNormalize(V);
 	  vNormalize(R);
 	  specular[0] = Ispec(best_t_index, j, 0, V, R, N, L, ns);
@@ -1692,9 +1698,14 @@ double Ispec (int o_index, int l_index, int c_index, double* V, double* R, doubl
   // calculations
   double VdotR = vDot(V,R);
   double NdotL = vDot(N,L);
+  double NdotR = vDot(N,R);
+  double VdotL = vDot(V,L);
 
   if (VdotR > 0 && NdotL > 0) {
-    rval = Ks*Il*pow(VdotR,ns);
+    //    rval = Ks*Il*pow(VdotR,ns); // points toward camera always
+    rval = Ks*Il*pow(NdotL,ns); // points toward light
+    // rval = Ks*Il*pow(NdotR,ns); // consumes the sphere unless ns is like 2000, then it seems similar to NdotL
+    //rval = Ks*Il*pow(VdotL,ns);  // takes the spec away entirely
   } else {
     rval = 0;
   }

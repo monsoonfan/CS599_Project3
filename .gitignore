@@ -59,4 +59,4 @@ log*
 *.c.bk_*
 run.csh
 notes.c
-raycast.specular_working_but_no_illumination_blending.c
+testscale.c
