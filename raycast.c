@@ -225,14 +225,14 @@ void  renderScene           (JSON_object *scene, RGBPixel *image);
 double getIntersections     (int index, double* Ro, double* Rd, double t_i);
 double sphereIntersection   (double* Ro, double* Rd, double* C, double r);
 double planeIntersection    (double* Ro, double* Rd, double* C, double* N);
-double quadricIntersection  (double* Ro, double* Rd, double* C, A_J c);
+double quadricIntersection  (double* Ro, double* Rd, double* C, A_J c, double* Nq);
 double cylinderIntersection (double* Ro, double* Rd, double* C, double r);
 
 //double * rayCast               (double* Ro, double* Rd, double* color);
 void rayCast(double* Ro, double* Rd, double* color_in, double* color_out);
 
 double getColor        (double value1, double value2);
-void   getObjectNormal (int index, double* Ro, double* N);
+void   getObjectNormal (int index, double* Ro, double* Qn, double* N);
 unsigned char convertColor (double color);
 
 double fAng (int l_index, double* V);
@@ -1026,6 +1026,7 @@ void rayCast(double* Ro, double* Rd, double* color_in, double* color_out) {
   double best_t = INFINITY;
   int    best_t_index = 129;
   double object_color[3];
+  double Qn[3];              // this will be the normal for the quadric at intersection point 
   
   // next, need to make Rd so that it's actually normalized
   // TODO: here, or in the calling function?
@@ -1058,9 +1059,11 @@ void rayCast(double* Ro, double* Rd, double* color_in, double* color_out) {
 			       INPUT_FILE_DATA.js_objects[o].radius);
       break;
     case 4:
+      // Pass Qn into function so it can "return" Qn as the quadric normal
       t = quadricIntersection(Ro,Rd,
 			      INPUT_FILE_DATA.js_objects[o].position,
-			      INPUT_FILE_DATA.js_objects[o].coeffs);
+			      INPUT_FILE_DATA.js_objects[o].coeffs,
+			      Qn);
       break;
       // TODO: add case for light here
     case 5:
@@ -1108,6 +1111,7 @@ void rayCast(double* Ro, double* Rd, double* color_in, double* color_out) {
       light_position[2] = LIGHT_OBJECTS.light_objects[j].position[2];
       vSubtract(light_position,Ro_new,Rd_new);
       double dl = pDistance(light_position,Ro_new); // distance from object to light
+      double dummy_normal[3];                       // dummy value to pass into function
       
       // now iterate over each object in the scene and check for intersection, indicating a shadow
       for (int k = 0; k < INPUT_FILE_DATA.num_objects ; k++) { 
@@ -1125,23 +1129,24 @@ void rayCast(double* Ro, double* Rd, double* color_in, double* color_out) {
 	  break;
 	case 1:
 	  t_shadow = sphereIntersection(Ro_new,Rd_new,
-				 INPUT_FILE_DATA.js_objects[k].position,
-				 INPUT_FILE_DATA.js_objects[k].radius);
+					INPUT_FILE_DATA.js_objects[k].position,
+					INPUT_FILE_DATA.js_objects[k].radius);
 	  break;
 	case 2:	
 	  t_shadow = planeIntersection(Ro_new,Rd_new,
-				INPUT_FILE_DATA.js_objects[k].position,
-				INPUT_FILE_DATA.js_objects[k].normal);
+				       INPUT_FILE_DATA.js_objects[k].position,
+				       INPUT_FILE_DATA.js_objects[k].normal);
 	  break;
 	case 3:
 	  t_shadow = cylinderIntersection(Ro_new,Rd_new,
-				   INPUT_FILE_DATA.js_objects[k].position,
-				   INPUT_FILE_DATA.js_objects[k].radius);
+					  INPUT_FILE_DATA.js_objects[k].position,
+					  INPUT_FILE_DATA.js_objects[k].radius);
 	  break;
 	case 4:
 	  t_shadow = quadricIntersection(Ro_new,Rd_new,
-				  INPUT_FILE_DATA.js_objects[k].position,
-				  INPUT_FILE_DATA.js_objects[k].coeffs);
+					 INPUT_FILE_DATA.js_objects[k].position,
+					 INPUT_FILE_DATA.js_objects[k].coeffs,
+					 dummy_normal);
 	  break;
 	  // TODO: add case for light here
 	case 5:
@@ -1175,7 +1180,7 @@ void rayCast(double* Ro, double* Rd, double* color_in, double* color_out) {
 	  double V[3];
 
 	  //N = normal of the object we are testing for shadows
-	  getObjectNormal(best_t_index,Ro_new,N);
+	  getObjectNormal(best_t_index,Ro_new,Qn,N);
 	  //L = the new vector to the light source from shadow test object
 	  L[0] = Rd_new[0];
 	  L[1] = Rd_new[1];
@@ -1210,7 +1215,7 @@ void rayCast(double* Ro, double* Rd, double* color_in, double* color_out) {
 	  
 	  // compute the specular contribution
 	  double specular[3];
-	  int ns = 20;
+	  int ns = 50;
 	  vNormalize(V);
 	  vNormalize(R);
 	  specular[0] = Ispec(best_t_index, j, 0, V, R, N, L, ns);
@@ -1270,20 +1275,6 @@ double getColor (double value1, double value2) {
     return rval;
   }
 }
-
-/*
-double getIllumination () {
-  // uLs is unit vector toward surface point from light source, ns is surfacen ormal
-  // c = color intensity from reflected ray, cL is color of light source
-  // the c's are light illumination, not color
-  if (point light) {
-    c = -(vDot(uLs,ns))cL; 
-  } else if (spot light) {
-    c = -(vDot(uLs,uL)^nL(vDot(uLs,ns))cL
-  }
-}
-*/
-
 
 // convert double color into int color value
 unsigned char convertColor (double color) {
@@ -1383,7 +1374,7 @@ double cylinderIntersection(double* Ro, double* Rd, double* C, double r) {
 }
 
 // Quadric intersection code
-double quadricIntersection(double* Ro, double* Rd, double* C, A_J c) {
+double quadricIntersection(double* Ro, double* Rd, double* C, A_J c, double* Nq) {
   // Based on the siggraph documentation on
   // http://www.siggraph.org/education/materials/HyperGraph/raytrace/rtinter4.htm
   // Had to add in the offsets to position the object, the siggraph page didn't have that
@@ -1395,6 +1386,7 @@ double quadricIntersection(double* Ro, double* Rd, double* C, A_J c) {
     c.E*Rd[0]*C[2] - c.E*Rd[2]*C[0] - c.F*Rd[1]*C[2] - c.F*Rd[2]*C[1] + c.G*Rd[0] + c.H*Rd[1] + c.I*Rd[2];
   double Cq = c.A*sqr(C[0]) + c.B*sqr(C[1]) + c.C*sqr(C[2]) + c.D*C[0]*C[1] +
     c.E*C[0]*C[2] + c.F*C[1]*C[2] - c.G*C[0] - c.H*C[1] - c.I*C[2] + c.J;
+  double rval = -1; // will make it easier to calculate the normal, need t for that
 
   // Some debug statements
   if (VERBOSE) printf("DBG : xyz=(%f,%f,%f) AJ=(%f,%f,%f,%f)\n",C[0],C[1],C[2],c.A,c.B,c.C,c.D);
@@ -1416,13 +1408,26 @@ double quadricIntersection(double* Ro, double* Rd, double* C, A_J c) {
   
   double t0 = (-Bq - disc) / (2 * Aq);
   if (VERBOSE) printf("DBG : t0=%f\n",t0);
-  if (t0 > 0) return t0; // smaller/lesser of the 2 values, needs to come first
+  if (t0 > 0) rval = t0; // smaller/lesser of the 2 values, needs to come first
+  goto CN;
 
   double t1 = (-Bq + disc) / (2 * Aq);
   if (VERBOSE) printf("DBG : t1=%f\n",t1);
-  if (t1 > 0) return t1;
+  if (t1 > 0) rval = t1;
 
-  return -1;
+  // surface normal
+ CN: {
+    double t = rval;
+    double Rx = Ro[0] + t*Rd[0] - C[0];
+    double Ry = Ro[1] + t*Rd[1] - C[1];
+    double Rz = Ro[2] + t*Rd[2] - C[2];
+    Nq[0] = c.A*(Rx) + c.B*(Ry) + c.C*(Rz) + c.D;
+    Nq[1] = c.B*(Rx) + c.E*(Ry) + c.F*(Rz) + c.G;
+    Nq[2] = c.C*(Rx) + c.F*(Ry) + c.H*(Rz) + c.I;
+    vNormalize(Nq);
+  }
+
+  return rval;
 }
 
 // Helper functions to find the first camera object and get it's specified width/height
@@ -1495,7 +1500,7 @@ void checkJSON (JSON_object *object) {
     case 4:
       if (!object[o].flags.has_position)      
 	message("Error","Quadric object is missing position!");
-      if (!object[o].flags.has_color)      
+      if (!object[o].flags.has_color && !(object[o].flags.has_diffuse_color && object[o].flags.has_specular_color))
 	message("Error","Quadric object is missing color!");
       if (!object[o].flags.has_A)      
 	message("Error","Quadric object is missing A parameter!");
@@ -1534,31 +1539,35 @@ void checkJSON (JSON_object *object) {
   if (INFO) message("Info","Done checking JSON for errors...");
 }
 
-// Helper function to get the closest object intersection along a ray
+// Helper function to get the closest object intersection along a ray, so we don't have to
+// copy/paste this code
 double getIntersections (int index, double* Ro, double* Rd, double t_i) {
+  
+  double dummy_normal[3];
   
   switch(INPUT_FILE_DATA.js_objects[index].typecode) {
   case 0: // skip the camera
     break;
   case 1:
     t_i = sphereIntersection(Ro,Rd,
-			   INPUT_FILE_DATA.js_objects[index].position,
-			   INPUT_FILE_DATA.js_objects[index].radius);
-    break;
-  case 2:	
-    t_i = planeIntersection(Ro,Rd,
-			  INPUT_FILE_DATA.js_objects[index].position,
-			  INPUT_FILE_DATA.js_objects[index].normal);
-    break;
-  case 3:
-    t_i = cylinderIntersection(Ro,Rd,
 			     INPUT_FILE_DATA.js_objects[index].position,
 			     INPUT_FILE_DATA.js_objects[index].radius);
     break;
+  case 2:	
+    t_i = planeIntersection(Ro,Rd,
+			    INPUT_FILE_DATA.js_objects[index].position,
+			    INPUT_FILE_DATA.js_objects[index].normal);
+    break;
+  case 3:
+    t_i = cylinderIntersection(Ro,Rd,
+			       INPUT_FILE_DATA.js_objects[index].position,
+			       INPUT_FILE_DATA.js_objects[index].radius);
+    break;
   case 4:
     t_i = quadricIntersection(Ro,Rd,
-			    INPUT_FILE_DATA.js_objects[index].position,
-			    INPUT_FILE_DATA.js_objects[index].coeffs);
+			      INPUT_FILE_DATA.js_objects[index].position,
+			      INPUT_FILE_DATA.js_objects[index].coeffs,
+			      dummy_normal);
     break;
     // TODO: add case for light here
   case 5:
@@ -1567,7 +1576,7 @@ double getIntersections (int index, double* Ro, double* Rd, double t_i) {
     message("Error","Unhandled typecode, camera/light/plane/sphere are supported");
   }
 }
- 
+
 // Helper to get populate the array of lights in the scene, will make shading easier to have this array
 void populateLightArray () {
   if (INFO) message("Info","Populating array containing light objects...");
@@ -1598,7 +1607,7 @@ void populateLightArray () {
   if (INFO) printf("Info: Done, found %d light objects\n",LIGHT_OBJECTS.num_lights);
 }
 
-void getObjectNormal (int index, double* Ro, double* N) {
+void getObjectNormal (int index, double* Ro, double* Qn, double* N) {
   // 0 = camera, 1 = sphere, 2 = plane, 3 = cylinder, 4 = quadric, 5 = light
   if (INPUT_FILE_DATA.js_objects[index].typecode == 2) {
     N[0] = INPUT_FILE_DATA.js_objects[index].normal[0];
@@ -1607,7 +1616,9 @@ void getObjectNormal (int index, double* Ro, double* N) {
   } else if (INPUT_FILE_DATA.js_objects[index].typecode == 1) {
     vSubtract(Ro,INPUT_FILE_DATA.js_objects[index].position,N);
   } else if (INPUT_FILE_DATA.js_objects[index].typecode == 4) {
-    //TODO: quadric case
+    N[0] = Qn[0];
+    N[1] = Qn[1];
+    N[2] = Qn[2];
   } else {
     //TODO: error handling
   }
