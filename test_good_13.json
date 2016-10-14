@@ -12,14 +12,7 @@
 "radial-a2": 1,
 "radial-a1": 1,
 "radial-a0": 1,
-"angular-a0": 0.75
-},
-{
-"type": "plane",
-"diffuse_color": [0, 0.5, 1.0],
-"specular_color": [0, 0, 1.0],
-"position": [0, -3, 5],
-"normal": [0, 1, 0]
+"angular-a0": 0.5
 },
 {
 "type": "sphere",

@@ -22,6 +22,12 @@ Questions:
 ---------
 3) Why do we multiply by 2 in the reflection equation? It doesn't make sense to me. It basically bends the reflection:
     Vr = V - 2(n dot v)*n
+
+) is theta from a spot the angular_a0 coeff directly? Don't know how to create those edge vectors otherwise
+) distance, I have to really reduce it's value, is it correct?
+) error checking scenarios (what to do about missing rad/ang attenuations, for example?
+
+TODO: dont' seem to be getting specular contribution on planes
 ---------------------------------------------------------------------------------------
 */
 #include <stdio.h>
@@ -229,8 +235,8 @@ double getColor        (double value1, double value2);
 void   getObjectNormal (int index, double* Ro, double* N);
 unsigned char convertColor (double color);
 
-double fAng (int index, double a1, double* V);
-double fRad (double a2, double a1, double a0, double dl);
+double fAng (int l_index, double* V);
+double fRad (int l_index, double dl);
 double Idiff (int o_index, int l_index, int c_index, double* N, double* L);
 double Ispec (int o_index, int l_index, int c_index, double* V, double* R, double* N, double* L, double ns);
 
@@ -807,22 +813,21 @@ void reportPixelMap (RGBPixel *pm) {
 // helper to print out a JSON_object
 void printJSONObjectStruct (JSON_object jostruct) {
   printf("type: %s\n",jostruct.type);
+  printf("  d color: [%f, %f, %f]\n",jostruct.diffuse_color[0], jostruct.diffuse_color[1], jostruct.diffuse_color[2]);
+  printf("  s color: [%f, %f, %f]\n",jostruct.specular_color[0], jostruct.specular_color[1], jostruct.specular_color[2]);
+  printf("  color: [%f, %f, %f]\n",jostruct.color[0], jostruct.color[1], jostruct.color[2]);
   if (strcmp(jostruct.type,"camera") == 0) {
     printf(" width: %f\n",jostruct.width);
     printf("height: %f\n",jostruct.height);
   } else if (strcmp(jostruct.type,"light") == 0) {
-    printf("    color: [%f, %f, %f]\n",jostruct.color[0], jostruct.color[1], jostruct.color[2]);
     printf(" position: [%f, %f, %f]\n",jostruct.position[0], jostruct.position[1], jostruct.position[2]);
   } else if (strcmp(jostruct.type,"sphere") == 0) {
-    printf("    color: [%f, %f, %f]\n",jostruct.color[0], jostruct.color[1], jostruct.color[2]);
     printf(" position: [%f, %f, %f]\n",jostruct.position[0], jostruct.position[1], jostruct.position[2]);
     printf("   radius: %f\n",jostruct.radius);
   } else if (strcmp(jostruct.type,"plane") == 0) {
-    printf("    color: [%f, %f, %f]\n",jostruct.color[0], jostruct.color[1], jostruct.color[2]);
     printf(" position: [%f, %f, %f]\n",jostruct.position[0], jostruct.position[1], jostruct.position[2]);
     printf("   normal: [%f, %f, %f]\n",jostruct.normal[0], jostruct.normal[1], jostruct.normal[2]);
   } else if (strcmp(jostruct.type,"quadric") == 0) {
-    printf("    color: [%f, %f, %f]\n",jostruct.color[0], jostruct.color[1], jostruct.color[2]);
     printf(" position: [%f, %f, %f]\n",jostruct.position[0], jostruct.position[1], jostruct.position[2]);
     printf("        A: %f\n",jostruct.coeffs.A);
     printf("        B: %f\n",jostruct.coeffs.B);
@@ -1153,6 +1158,7 @@ void rayCast(double* Ro, double* Rd, double* color_in, double* color_out) {
 
 	// remember you need to clamp the distance to not go beyond the light's distance to any object beyond it
 	// it's not this simple, you can have objects farther than the light in a diff direction
+	// TODO: implement this if there's time
 	//if (best_t_shadow > dl) continue;
 
 	if (best_t_shadow_index != 129) {
@@ -1189,14 +1195,12 @@ void rayCast(double* Ro, double* Rd, double* color_in, double* color_out) {
 
 	  // compute radial attenuation
 	  vNormalize(N);
-	  vNormalize(L);
-	  double dl = pDistance(light_position,Ro_new); // distance from object to light
-	  dl *= .05; // TODO fix parser to handle a1/a0 terms from JSOn for point lights
-	  double r_atten = fRad(LIGHT_OBJECTS.light_objects[j].radial_a0, 1, 1, dl); //params:(a2,a1,a0,dl)
+	  dl *= .05;
+	  double r_atten = fRad(j, dl);
 	  
 	  // compute the angular attenuation
-	  double a1 = 1; // TODO: "attenuation tweak", what is this?
-	  double a_atten = fAng (j, a1, L); // params: (index of the light on global lights array,a1,L)
+	  double a_atten = fAng (j, L);
+	  vNormalize(L);
 
 	  // compute the diffuse contribution
 	  double diffuse[3];
@@ -1481,7 +1485,7 @@ void checkJSON (JSON_object *object) {
     case 2: // plane
       if (!object[o].flags.has_position)      
 	message("Error","Plane object is missing position!");
-      if (!object[o].flags.has_color)      
+      if (!object[o].flags.has_color && !(object[o].flags.has_diffuse_color && object[o].flags.has_specular_color))
 	message("Error","Plane object is missing color!");
       if (!object[o].flags.has_normal)      
 	message("Error","Plane object is missing normal!");
@@ -1520,6 +1524,8 @@ void checkJSON (JSON_object *object) {
 	message("Error","Light object is missing position!");
       if (!object[o].flags.has_color)      
 	message("Error","Light  object is missing color!");
+      if (!object[o].flags.has_radial_a2)      
+	message("Error","Light  object is missing radial-a2!");
       break;
     default:
       message("Error","Un-caught error, was missed during parsing");
@@ -1613,13 +1619,25 @@ void getObjectNormal (int index, double* Ro, double* N) {
 //                use the index as opposed to passing in all the parameter values for the light itself
 //        - a1    (this is the "attenuation tweak" constant
 //        - Vo    (this is the vector from the object to the light, reverse it to get Vo)
-double fAng (int index, double a1, double* V) {
-  double* Vl; // this is the vector from the spot in it's direction
-  double* Vo; // reverse the V vector
-  double alpha;
-  double theta;
-  
-  if (!LIGHT_OBJECTS.light_objects[index].angular_a0) { // not a spotlight
+double fAng (int l_index, double* V) {
+  double a1 = LIGHT_OBJECTS.light_objects[l_index].angular_a0;
+  double Vl[3]; // this is the vector from the spot in it's direction
+  double Vo[3]; // reverse of the V vector
+  double Ve[3]; // this edge vector, from center of spot along it's outer edge
+
+  // create the vectors
+  Vl[0] = LIGHT_OBJECTS.light_objects[l_index].direction[0];
+  Vl[1] = LIGHT_OBJECTS.light_objects[l_index].direction[1];
+  Vl[2] = LIGHT_OBJECTS.light_objects[l_index].direction[2];
+  vScale(V,-1,Vo);
+
+  // compute the angles
+  double alpha = vDot(Vl,Vo);
+  //TODO: confirm this theta assumption
+  double theta = LIGHT_OBJECTS.light_objects[l_index].angular_a0;
+
+  // now compute and return the value
+  if (!LIGHT_OBJECTS.light_objects[l_index].angular_a0) { // not a spotlight, could also use direction??
     return 1.0;
   } else if (alpha > theta) {
     return 0;
@@ -1630,12 +1648,12 @@ double fAng (int index, double a1, double* V) {
 
 // Radial attenuation function
 // params:
-//        - a2
-//        - a1
-//        - a0  
-//        - dl  (this is the distance from the light to the object
-double fRad (double a2, double a1, double a0, double dl) {
-  //TODO clarify this a1, or 2 subscript 1 whatever that would be
+//        - index  (the index of the light on the light objects array so we can pull params from there)
+//        - dl     (this is the distance from the light to the object
+double fRad (int l_index, double dl) {
+  double a2 = LIGHT_OBJECTS.light_objects[l_index].radial_a2;
+  double a1 = LIGHT_OBJECTS.light_objects[l_index].radial_a1;
+  double a0 = LIGHT_OBJECTS.light_objects[l_index].radial_a0;
   if (dl == INFINITY) {
     return 1;
   } else {
