@@ -1007,6 +1007,7 @@ void renderScene(JSON_object *scene, RGBPixel *image) {
       //      double* color_out = malloc(3*sizeof(double));
       double default_color[3] = {DEFAULT_COLOR,DEFAULT_COLOR,DEFAULT_COLOR};
       double color_out[3] = {0,0,0};
+      if (DBG) printf("calling rC @ {%d,%d}\n",x,y);
       rayCast(Ro,Rd,default_color,color_out);
       RGB_PIXEL_MAP[i].r = convertColor(color_out[0]);
       RGB_PIXEL_MAP[i].g = convertColor(color_out[1]);
@@ -1087,16 +1088,17 @@ void rayCast(double* Ro, double* Rd, double* color_in, double* color_out) {
   // t values, that hit first, shade that one
   if (best_t > 0 && best_t != INFINITY) {
     
-    // Notes from 10/16
     // Add the shading function, project3 main task
-    double t_shadow = 0;
-    int    best_t_shadow_index = 129; // then maintain this throughout code
-    double best_t_shadow = INFINITY;
-
-    if (DBG) printf("DBG rC (%s)[%d]\n",INPUT_FILE_DATA.js_objects[best_t_index].type,best_t_index);
+    if (DBG) printf("rC: (%s)[%d]\n",INPUT_FILE_DATA.js_objects[best_t_index].type,best_t_index);
 
     // now, the summation of all the lights in the scene
     for (int j = 0; j < LIGHT_OBJECTS.num_lights; j++) {
+      // variables for each light
+      double t_shadow = 0;
+      int    best_t_shadow_index = 129; // then maintain this throughout code
+      double best_t_shadow = INFINITY;
+      
+      if (DBG) printf("  light index (%d)\n",j);
       // shadow test for each light, first create new Ro for the shadow test
       double Ro_tmp[3];
       double Ro_new[3];
@@ -1115,15 +1117,18 @@ void rayCast(double* Ro, double* Rd, double* color_in, double* color_out) {
       
       // now iterate over each object in the scene and check for intersection, indicating a shadow
       for (int k = 0; k < INPUT_FILE_DATA.num_objects ; k++) { 
+	if (DBG) printf("    object index (%d) is a (%d)\n",k,INPUT_FILE_DATA.js_objects[k].typecode);
 	// skip lights and cameras, won't have intersections
 	if (INPUT_FILE_DATA.js_objects[k].typecode == 0) continue;
 	if (INPUT_FILE_DATA.js_objects[k].typecode == 5) continue;
 	
 	// how to deal with the object we are checking from itself, could shadow parts of itself from the light
+	if (DBG) printf("    checking against (%d)\n",best_t_index);
 	if (k == best_t_index) continue;
 
 	// test for intersections to find shadows
 	// TODO: use functionized code instead of this copy/paste hack
+	if (DBG) printf("    testing intersections...[%f]\n",t_shadow);
 	switch(INPUT_FILE_DATA.js_objects[k].typecode) {
 	case 0: // skip the camera
 	  break;
@@ -1131,22 +1136,26 @@ void rayCast(double* Ro, double* Rd, double* color_in, double* color_out) {
 	  t_shadow = sphereIntersection(Ro_new,Rd_new,
 					INPUT_FILE_DATA.js_objects[k].position,
 					INPUT_FILE_DATA.js_objects[k].radius);
+	  if (DBG) printf("     case1[%f]\n",t_shadow);
 	  break;
 	case 2:	
 	  t_shadow = planeIntersection(Ro_new,Rd_new,
 				       INPUT_FILE_DATA.js_objects[k].position,
 				       INPUT_FILE_DATA.js_objects[k].normal);
+	  if (DBG) printf("     case2[%f]\n",t_shadow);
 	  break;
 	case 3:
 	  t_shadow = cylinderIntersection(Ro_new,Rd_new,
 					  INPUT_FILE_DATA.js_objects[k].position,
 					  INPUT_FILE_DATA.js_objects[k].radius);
+	  if (DBG) printf("     case3[%f]\n",t_shadow);
 	  break;
 	case 4:
 	  t_shadow = quadricIntersection(Ro_new,Rd_new,
 					 INPUT_FILE_DATA.js_objects[k].position,
 					 INPUT_FILE_DATA.js_objects[k].coeffs,
 					 dummy_normal);
+	  if (DBG) printf("     case4[%f]\n",t_shadow);
 	  break;
 	  // TODO: add case for light here
 	case 5:
@@ -1162,16 +1171,17 @@ void rayCast(double* Ro, double* Rd, double* color_in, double* color_out) {
 	}
 
 	// remember you need to clamp the distance to not go beyond the light's distance to any object beyond it
-	// it's not this simple, you can have objects farther than the light in a diff direction
 	// TODO: implement this if there's time
-	//if (best_t_shadow > dl) continue;
+	if (DBG) printf("      b_t_s: %f, b_t_s_i: %d, dl: %f\n",best_t_shadow,best_t_shadow_index,dl);
+	if (best_t_shadow > dl && best_t_shadow != INFINITY) goto SP;
 
 	if (best_t_shadow_index != 129) {
 	  // in a shadow, shade the pixel based on ambient light
 	  color_out[0] = getColor(object_color[0],ambient_color[0]);
 	  color_out[1] = getColor(object_color[1],ambient_color[1]);
 	  color_out[2] = getColor(object_color[2],ambient_color[2]);
-	} else { 
+	  if (DBG) printf("      in shadow, ambient color: [%f,%f,%f]\n",color_out[0],color_out[1],color_out[2]);
+	} else SP: { 
 	  // not in a shadow, shade the pixel based on light source
 	  // use N,L,R,V & fRad/fAng functions
 	  double N[3];
@@ -1230,11 +1240,13 @@ void rayCast(double* Ro, double* Rd, double* color_in, double* color_out) {
 	  color_out[1] += r_atten * a_atten * (diffuse[1] + specular[1]);
 	  color_out[2] += r_atten * a_atten * (diffuse[2] + specular[2]);
 
+	  /*
 	  if (DBG) printf("DBG co[0](%f): co(%f), r_a(%f), a_a(%f), d(%f), s(%f)\n"
 		 ,color_out[0],tmp0,r_atten,a_atten,diffuse[0],specular[0]);
 	  if (DBG) printf("DBG co[1](%f): co(%f), r_a(%f), a_a(%f), d(%f), s(%f)\n"
 		 ,color_out[1],tmp1,r_atten,a_atten,diffuse[1],specular[1]);
-	  if (DBG) printf("DBG co[2](%f): co(%f), r_a(%f), a_a(%f), d(%f), s(%f)\n"
+	  */
+	  if (DBG) printf("      co[2](%f): co(%f), r_a(%f), a_a(%f), d(%f), s(%f)\n"
 		 ,color_out[2],tmp2,r_atten,a_atten,diffuse[2],specular[2]);
 	}
       }
@@ -1336,15 +1348,16 @@ double planeIntersection(double* Ro, double* Rd, double* C, double* N) {
   double V0 = vDot(N,the_diff);
 
   VERBOSE = 0; // DBG TODO remove
-  //if (VERBOSE) printf("C0: %f, C1: %f, C2: %f\n",the_diff[0],the_diff[1],the_diff[2]);
+  if (VERBOSE) printf("C0: %f, C1: %f, C2: %f\n",the_diff[0],the_diff[1],the_diff[2]);
 
   double t = V0 / Vd;
-  //  if (VERBOSE) printf("V0: %f, Vd: %f, t: %f\n",V0,Vd,t);
+  if (VERBOSE) printf("V0: %f, Vd: %f, t: %f\n",V0,Vd,t);
 
   if (t < 0) return -1; // plane intersection is behind origin, ignore it
 
   // if we got this far, plane intersects the ray in front of origin
-  //  if (VERBOSE) printf("returning %f\n",t);
+  if (VERBOSE) printf("returning %f\n",t);
+  VERBOSE = 0; // DBG TODO remove
   return t;
 }
 
@@ -1607,6 +1620,9 @@ void populateLightArray () {
   if (INFO) printf("Info: Done, found %d light objects\n",LIGHT_OBJECTS.num_lights);
 }
 
+// helper to return the normal for the given object
+// pass in the quadric normal (which was already computed for the given point)
+// if the object is not a quadric, then simply ignore it
 void getObjectNormal (int index, double* Ro, double* Qn, double* N) {
   // 0 = camera, 1 = sphere, 2 = plane, 3 = cylinder, 4 = quadric, 5 = light
   if (INPUT_FILE_DATA.js_objects[index].typecode == 2) {
@@ -1738,7 +1754,7 @@ double Ispec (int o_index, int l_index, int c_index, double* V, double* R, doubl
   } else {
     rval = 0;
   }
-  if (DBG) printf("DBG Ispec(%f): o_i(%d), c_i(%d), Il(%f), VdR(%f), NdL(%f), V[%f,%f,%f], R[%f,%f,%f], \nN[%f,%f,%f], L[%f,%f,%f]\n",rval,o_index,c_index,Il,VdotR,NdotL,V[0],V[1],V[2],R[0],R[1],R[2],N[0],N[1],N[2],L[0],L[1],L[2]);
+  //  if (DBG) printf("DBG Ispec(%f): o_i(%d), c_i(%d), Il(%f), VdR(%f), NdL(%f), V[%f,%f,%f], R[%f,%f,%f], \nN[%f,%f,%f], L[%f,%f,%f]\n",rval,o_index,c_index,Il,VdotR,NdotL,V[0],V[1],V[2],R[0],R[1],R[2],N[0],N[1],N[2],L[0],L[1],L[2]);
   return rval;
 }
 

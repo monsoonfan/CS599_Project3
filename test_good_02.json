@@ -7,7 +7,7 @@
 {
 "type": "light",
 "color": [3.0, 2.0, 1.0],
-"position": [15, 10, 30],
+"position": [5, 15, 0],
     "radial-a0": 1,
     "radial-a1": 1,
 "radial-a2": 1

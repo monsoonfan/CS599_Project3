@@ -44,15 +44,11 @@ testbad.%:
 	./raycast 600 600 test_bad_$*.json test.ppm
 
 testall:
-	make testgood.00
 	make testgood.01
 	make testgood.02
-	make testgood.03
-	make testgood.04
-	make testgood.05
-	make testgood.06
-	make testgood.07
-	make testgood.08
+	make testgood.10
+	make testgood.11
+	make testgood.12
 
 #############################################
 # targets for simple test configs
