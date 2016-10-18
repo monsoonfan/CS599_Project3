@@ -149,6 +149,7 @@ typedef struct light_object {
   double radial_a2;
   double angular_a0;
   double theta;
+  has_values flags;
 } light_object ;
 
 typedef struct light_object_struct {
@@ -209,6 +210,12 @@ static inline void vScale(double* a, double s, double* c) {
 static inline double pDistance (double* a, double* b) {
   return sqrt(sqr(b[0]-a[0]) + sqr(b[1]-a[1]) + sqr(b[2]-a[2]));
 }
+
+static inline double degreesToRadians (double deg) {
+  //return degrees = radians * 180.0 / M_PI;
+  return deg * M_PI / 180;
+}
+
 // END inline functions
 
 // global variables
@@ -1280,7 +1287,7 @@ void rayCast(double* Ro, double* Rd, double* color_in, double* color_out) {
   }
 }
 
-// helper function to convert 0 to 1 color scale into 0 to 255 color scale for PPM
+// helper function to blend 2 colors together, used only in ambient case
 double getColor (double value1, double value2) {
   double rval;
   if (value1 == DEFAULT_COLOR && value2 == DEFAULT_COLOR) {
@@ -1671,6 +1678,9 @@ void populateLightArray () {
       LIGHT_OBJECTS.light_objects[light_count].radial_a2 = INPUT_FILE_DATA.js_objects[o].radial_a2;
       LIGHT_OBJECTS.light_objects[light_count].angular_a0 = INPUT_FILE_DATA.js_objects[o].angular_a0;
       LIGHT_OBJECTS.light_objects[light_count].theta = INPUT_FILE_DATA.js_objects[o].theta;
+      LIGHT_OBJECTS.light_objects[light_count].flags.has_direction = INPUT_FILE_DATA.js_objects[o].flags.has_direction;
+      LIGHT_OBJECTS.light_objects[light_count].flags.has_angular_a0 = INPUT_FILE_DATA.js_objects[o].flags.has_angular_a0;
+      LIGHT_OBJECTS.light_objects[light_count].flags.has_theta = INPUT_FILE_DATA.js_objects[o].flags.has_theta;
       light_count++;
     }
   }
@@ -1720,10 +1730,17 @@ double fAng (int l_index, double* V) {
 
   // compute the angles
   double alpha = vDot(Vl,Vo);
+  // had a great image with 13 once before making this conversion
+  //double theta = degreesToRadians(LIGHT_OBJECTS.light_objects[l_index].theta);
   double theta = LIGHT_OBJECTS.light_objects[l_index].theta;
 
   // now compute and return the value
-  if (!LIGHT_OBJECTS.light_objects[l_index].angular_a0) { // not a spotlight, could also use direction??
+  if (
+      !LIGHT_OBJECTS.light_objects[l_index].flags.has_angular_a0 &&
+      !LIGHT_OBJECTS.light_objects[l_index].flags.has_direction &&
+      !LIGHT_OBJECTS.light_objects[l_index].flags.has_theta
+      ) { // not a spotlight, could also use direction??
+    if (DBG2) printf("  fAng skipping because (%d,%d,%d)\n",LIGHT_OBJECTS.light_objects[l_index].flags.has_angular_a0,LIGHT_OBJECTS.light_objects[l_index].flags.has_direction,LIGHT_OBJECTS.light_objects[l_index].flags.has_theta);
     return 1.0;
     //  } else if (abs(alpha) > theta) {
     // bounds on theta, less than 180 degrees
@@ -1881,7 +1898,6 @@ void getReflectionVector (double* L, double* N, double* R, int DBG_flag) {
 
 // triangluation is the way that things are done, even in production raytracers
 
-// if you have theta = 0, no direction, or no angular-a0, then the light is a point light
 // he aliased color to diffuse_color, so old JSON also works, we don't have to do that but we can
 // KaIa - could have Ka be some ambience from the object, Ia some ambiance from the light
 // he won't test us on lights on wrong side of plane or inside of sphere
