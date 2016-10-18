@@ -14,20 +14,32 @@ functions are named with camelCase naming convention
 
 Issues:
 -------
-- need to get light sources working
-- fix intersection equations so that Ro doesn't have to be 0,0,0
-- add getColor code per equations to return proper shaded color
+- need to get spotlights working
+- specular reflection not correct, pointing at the light directly, not the reflection
+  (should be reflection calculation that's not correct)
+- quadric normal appears to be incorrect, diffuse color is on wrong side of cylinder, always same for ellipsoid
+  regardless of where I move the light
+- what to do about when no specular color is given (like project example JSON)
+
+- planeIntersection appears incorrect, re-do the equations (actually, I think the ray is casting backwards)
+** did that, still exact same. Ro_new seems backward by -1. Not sure how **
+** as soon as Rd becomes negative, we get the problem, why does it go negative??
+  o 12.json is getting false shadows on sphere in the back
+  o plane above the camera is not working correctly (actually I think it's fine)
+  o plane back-sides are not working
 
 Questions:
 ---------
+) for spot light of [0,-1,0], the dot product will always equal the 2nd term in the incoming vector, example:
+fAng rv: V[10.000000,-9.050125,-2.277917], alpha: 9.050125 (for the plane on left side at x= -10, and the only thing that happens is y is clamped at theta, not an angle, but a literal value - so clamping looks too hard
+
 3) Why do we multiply by 2 in the reflection equation? It doesn't make sense to me. It basically bends the reflection:
     Vr = V - 2(n dot v)*n
 
-) is theta from a spot the angular_a0 coeff directly? Don't know how to create those edge vectors otherwise
 ) distance, I have to really reduce it's value, is it correct?
 ) error checking scenarios (what to do about missing rad/ang attenuations, for example?
 
-TODO: dont' seem to be getting specular contribution on planes
+TODO: dont seem to be getting specular contribution on planes
 ---------------------------------------------------------------------------------------
 */
 #include <stdio.h>
@@ -92,6 +104,7 @@ typedef struct has_values {
   int has_radial_a1;
   int has_radial_a2;
   int has_angular_a0;
+  int has_theta;
   int has_A;
   int has_B;
   int has_C;
@@ -121,6 +134,7 @@ typedef struct JSON_object {
   double radial_a1;
   double radial_a2;
   double angular_a0;
+  double theta;
   A_J coeffs;       // quadric coefficients
   has_values flags; // help with error checking, flag to make sure values are set
 } JSON_object ;
@@ -134,6 +148,7 @@ typedef struct light_object {
   double radial_a1;
   double radial_a2;
   double angular_a0;
+  double theta;
 } light_object ;
 
 typedef struct light_object_struct {
@@ -174,6 +189,7 @@ static inline void vSubtract(double* a, double* b, double* c) {
   c[0] = a[0] - b[0];
   c[1] = a[1] - b[1];
   c[2] = a[2] - b[2];
+  //  printf("  vSubtract DBG: [%f,%f,%f] - [%f,%f,%f] = [%f, %f, %f]\n",a[0],a[1],a[2],b[0],b[1],b[2],c[0],c[1],c[2]);
 }
 
 static inline double vDot(double* a, double* b) {
@@ -200,6 +216,7 @@ int OUTPUT_MAGIC_NUMBER = 6; // default to P6 PPM format
 int VERBOSE             = 0; // controls logfile message level
 int INFO                = 1; // controls if Info messages are printed, turn off prior to submission
 int DBG                 = 0; // turns on the current set of DBG statements, whatever they are
+int DBG2                = 0; 
 
 double ambient_color[3] = {0.05,0.05,0.05}; // HACK: define these until ambient color from JSON supported
 
@@ -225,6 +242,7 @@ void  renderScene           (JSON_object *scene, RGBPixel *image);
 double getIntersections     (int index, double* Ro, double* Rd, double t_i);
 double sphereIntersection   (double* Ro, double* Rd, double* C, double r);
 double planeIntersection    (double* Ro, double* Rd, double* C, double* N);
+double planeIntersectionOrig    (double* Ro, double* Rd, double* C, double* N);
 double quadricIntersection  (double* Ro, double* Rd, double* C, A_J c, double* Nq);
 double cylinderIntersection (double* Ro, double* Rd, double* C, double r);
 
@@ -233,7 +251,7 @@ void rayCast(double* Ro, double* Rd, double* color_in, double* color_out);
 
 double getColor        (double value1, double value2);
 void   getObjectNormal (int index, double* Ro, double* Qn, double* N);
-unsigned char convertColor (double color);
+unsigned char clampColor (double color);
 
 double fAng (int l_index, double* V);
 double fRad (int l_index, double dl);
@@ -250,7 +268,7 @@ double getCameraWidth();
 double getCameraHeight();
 void   populateLightArray ();
 
-double testScale ();
+void getReflectionVector (double* L, double* N, double* R, int DBG_flag);
 
 /* 
  ------------------------------------------------------------------
@@ -469,6 +487,7 @@ void readScene(char* filename) {
 	      (strcmp(key, "radial-a1") == 0) ||
 	      (strcmp(key, "radial-a2") == 0) ||
 	      (strcmp(key, "angular-a0") == 0) ||
+	      (strcmp(key, "theta") == 0) ||
 	      (strcmp(key, "A") == 0) ||
 	      (strcmp(key, "B") == 0) ||
 	      (strcmp(key, "C") == 0) ||
@@ -583,7 +602,10 @@ int main(int argc, char *argv[]) {
   writePPM(outfile,&OUTPUT_FILE_DATA);
 
   // TODO DBG remove
-  testScale();
+  double N[3] = {0,1,0};
+  double L[3] = {-1,1,0};
+  double R[3];
+  getReflectionVector(L,N,R,1);
   
   // prepare to exit
   freeGlobalMemory();
@@ -883,6 +905,9 @@ void storeDouble(int obj_count, char* key, double value) {
   } else if (strcmp(key,"angular-a0") == 0) {
     INPUT_FILE_DATA.js_objects[obj_count].angular_a0 = value;
     INPUT_FILE_DATA.js_objects[obj_count].flags.has_angular_a0 = 1;
+  } else if (strcmp(key,"theta") == 0) {
+    INPUT_FILE_DATA.js_objects[obj_count].theta = value;
+    INPUT_FILE_DATA.js_objects[obj_count].flags.has_theta = 1;
   } else if (strcmp(key, "A") == 0) {
     INPUT_FILE_DATA.js_objects[obj_count].coeffs.A = value;
     INPUT_FILE_DATA.js_objects[obj_count].flags.has_A = 1;
@@ -1009,9 +1034,9 @@ void renderScene(JSON_object *scene, RGBPixel *image) {
       double color_out[3] = {0,0,0};
       if (DBG) printf("calling rC @ {%d,%d}\n",x,y);
       rayCast(Ro,Rd,default_color,color_out);
-      RGB_PIXEL_MAP[i].r = convertColor(color_out[0]);
-      RGB_PIXEL_MAP[i].g = convertColor(color_out[1]);
-      RGB_PIXEL_MAP[i].b = convertColor(color_out[2]);
+      RGB_PIXEL_MAP[i].r = clampColor(color_out[0]);
+      RGB_PIXEL_MAP[i].g = clampColor(color_out[1]);
+      RGB_PIXEL_MAP[i].b = clampColor(color_out[2]);
       //      free(color_out);
       i++; // increment the pixelmap counter
     }
@@ -1028,10 +1053,6 @@ void rayCast(double* Ro, double* Rd, double* color_in, double* color_out) {
   int    best_t_index = 129;
   double object_color[3];
   double Qn[3];              // this will be the normal for the quadric at intersection point 
-  
-  // next, need to make Rd so that it's actually normalized
-  // TODO: here, or in the calling function?
-  //      vNormalize(Rd);
   
   // loop over all objects in scene and find intersections, could also use objects != NULL
   for (int o = 0; o < INPUT_FILE_DATA.num_objects; o += 1) {
@@ -1102,8 +1123,13 @@ void rayCast(double* Ro, double* Rd, double* color_in, double* color_out) {
       // shadow test for each light, first create new Ro for the shadow test
       double Ro_tmp[3];
       double Ro_new[3];
+      if (DBG) printf("Rd: [%f, %f, %f]\n",Rd[0],Rd[1],Rd[2]); // Rd is normalized at this point
+      if (DBG) printf("best_t: %f\n",best_t);
       vScale(Rd,best_t,Ro_tmp);
+      if (DBG) printf("Ro: [%f, %f, %f]\n",Ro[0],Ro[1],Ro[2]);
+      if (DBG) printf("Ro_tmp: [%f, %f, %f]\n",Ro_tmp[0],Ro_tmp[1],Ro_tmp[2]);
       vAdd(Ro,Ro_tmp,Ro_new);
+      if (DBG) printf("Ro_new: [%f, %f, %f]\n",Ro_new[0],Ro_new[1],Ro_new[2]);
       
       // next, create new Rd for the shadow test and calculate distance to the light object
       double Rd_new[3];
@@ -1112,14 +1138,14 @@ void rayCast(double* Ro, double* Rd, double* color_in, double* color_out) {
       light_position[1] = LIGHT_OBJECTS.light_objects[j].position[1];
       light_position[2] = LIGHT_OBJECTS.light_objects[j].position[2];
       vSubtract(light_position,Ro_new,Rd_new);
+      if (DBG) printf("Rd_new: [%f, %f, %f]\n",Rd_new[0],Rd_new[1],Rd_new[2]);
       double dl = pDistance(light_position,Ro_new); // distance from object to light
-      double dummy_normal[3];                       // dummy value to pass into function
+      double dummy_normal[3];                       // dummy value to pass into quadric intersection function
       
       // now iterate over each object in the scene and check for intersection, indicating a shadow
       for (int k = 0; k < INPUT_FILE_DATA.num_objects ; k++) { 
 	if (DBG) printf("    object index (%d) is a (%d)\n",k,INPUT_FILE_DATA.js_objects[k].typecode);
-	// skip lights and cameras, won't have intersections
-	if (INPUT_FILE_DATA.js_objects[k].typecode == 0) continue;
+	// skip lights, won't have intersections (leave camera or 1 object scene will not render)
 	if (INPUT_FILE_DATA.js_objects[k].typecode == 5) continue;
 	
 	// how to deal with the object we are checking from itself, could shadow parts of itself from the light
@@ -1136,7 +1162,7 @@ void rayCast(double* Ro, double* Rd, double* color_in, double* color_out) {
 	  t_shadow = sphereIntersection(Ro_new,Rd_new,
 					INPUT_FILE_DATA.js_objects[k].position,
 					INPUT_FILE_DATA.js_objects[k].radius);
-	  if (DBG) printf("     case1[%f]\n",t_shadow);
+	  //	  if (DBG) printf("     case1[%f]\n",t_shadow);
 	  break;
 	case 2:	
 	  t_shadow = planeIntersection(Ro_new,Rd_new,
@@ -1148,14 +1174,14 @@ void rayCast(double* Ro, double* Rd, double* color_in, double* color_out) {
 	  t_shadow = cylinderIntersection(Ro_new,Rd_new,
 					  INPUT_FILE_DATA.js_objects[k].position,
 					  INPUT_FILE_DATA.js_objects[k].radius);
-	  if (DBG) printf("     case3[%f]\n",t_shadow);
+	  //	  if (DBG) printf("     case3[%f]\n",t_shadow);
 	  break;
 	case 4:
 	  t_shadow = quadricIntersection(Ro_new,Rd_new,
 					 INPUT_FILE_DATA.js_objects[k].position,
 					 INPUT_FILE_DATA.js_objects[k].coeffs,
 					 dummy_normal);
-	  if (DBG) printf("     case4[%f]\n",t_shadow);
+	  //	  if (DBG) printf("     case4[%f]\n",t_shadow);
 	  break;
 	  // TODO: add case for light here
 	case 5:
@@ -1195,26 +1221,21 @@ void rayCast(double* Ro, double* Rd, double* color_in, double* color_out) {
 	  L[0] = Rd_new[0];
 	  L[1] = Rd_new[1];
 	  L[2] = Rd_new[2];
-	  //V = original ray from camera to first object
-	  V[0] = Rd[0];
-	  V[1] = Rd[1];
-	  V[2] = Rd[2];
-	  //R = reflection of L about N: R = L - 2(N dot L)N
-	  double LdotN = vDot(L,N);
-	  LdotN *= 2;
-	  double S[3]; // scaled vector
-	  vScale(N,LdotN,S);
-	  R[0] = L[0] - S[0];
-	  R[1] = L[1] - S[1];
-	  R[2] = L[2] - S[2];
-
+	  if (DBG) printf(" orig L: [%f, %f, %f]\n",L[0],L[1],L[2]);
+	  //V = original ray from camera to first object, Rd is normalized here
+	  V[0] = -Rd[0];
+	  V[1] = -Rd[1];
+	  V[2] = -Rd[2];
+	  //R = reflection of L about N: R = 2(N dot L)N - L
+	  getReflectionVector(L,N,R,DBG);
+	  
 	  // compute radial attenuation
 	  vNormalize(N);
-	  dl *= .05;
 	  double r_atten = fRad(j, dl);
 	  
 	  // compute the angular attenuation
-	  double a_atten = fAng (j, L);
+	  if (DBG) printf(" passing L to fAng: [%f, %f, %f]\n",L[0],L[1],L[2]);
+	  double a_atten = fAng(j, L);
 	  vNormalize(L);
 
 	  // compute the diffuse contribution
@@ -1226,7 +1247,7 @@ void rayCast(double* Ro, double* Rd, double* color_in, double* color_out) {
 	  // compute the specular contribution
 	  double specular[3];
 	  int ns = 50;
-	  vNormalize(V);
+	  //vNormalize(V);, this doesn't matter either way, V already normalize, can normalize again
 	  vNormalize(R);
 	  specular[0] = Ispec(best_t_index, j, 0, V, R, N, L, ns);
 	  specular[1] = Ispec(best_t_index, j, 1, V, R, N, L, ns);
@@ -1245,9 +1266,9 @@ void rayCast(double* Ro, double* Rd, double* color_in, double* color_out) {
 		 ,color_out[0],tmp0,r_atten,a_atten,diffuse[0],specular[0]);
 	  if (DBG) printf("DBG co[1](%f): co(%f), r_a(%f), a_a(%f), d(%f), s(%f)\n"
 		 ,color_out[1],tmp1,r_atten,a_atten,diffuse[1],specular[1]);
-	  */
 	  if (DBG) printf("      co[2](%f): co(%f), r_a(%f), a_a(%f), d(%f), s(%f)\n"
 		 ,color_out[2],tmp2,r_atten,a_atten,diffuse[2],specular[2]);
+	  */
 	}
       }
     }
@@ -1289,8 +1310,12 @@ double getColor (double value1, double value2) {
 }
 
 // convert double color into int color value
-unsigned char convertColor (double color) {
-  if (color > 1.0) color = 1;
+unsigned char clampColor (double color) {
+  if (color > 1.0) {
+    color = 1;
+  } else if (color < 0) {
+    color = 0;
+  }
   return round(color * 255);
 }
 
@@ -1334,8 +1359,38 @@ double sphereIntersection(double* Ro, double* Rd, double* C, double r) {
   return -1;
 }
 
-// plane intersection code (from several sources)
+// plane intersection code
 // arguments are: the ray (origin/direction), center of the plane, normal of the plane
+double planeIntersectionNew(double* Ro, double* Rd, double* C, double* N) {
+  
+  // use <ax + by + cz = d> (where a,b,c are from the normal vector, x,y,z are the center of the plane)
+  // solve for d first by using the normal and the point, then plug in the ray to look for solutions for t
+  double d = N[0]*C[0] + N[1]*C[1] + N[2]*C[2];
+  
+  // a(Ro[0] + t*Rd[0] - C[0]) + b(Ro[1] + t*Rd[1] - C[1]) + c(Ro[2] + t*Rd[2] - C[2]) - d = 0
+  // N[0](Ro[0] + t*Rd[0] - C[0]) + N[1](Ro[1] + t*Rd[1] - C[1]) + N[2](Ro[2] + t*Rd[2] - C[2]) - d = 0
+  // t * (N[0]*Rd[0] + N[1]*Rd[1] + N[2]*Rd[2]) + N[0]*Rd[0] - N[0]*C[0] + N[1]*Rd[1] - N[1]*C[1] + N[2]*Rd[2] - N[2]*C[2] - d = 0
+  double t;
+  double t_terms = N[0]*Rd[0] + N[1]*Rd[1] + N[2]*Rd[2];
+  double non_t_terms = N[0]*Ro[0] - N[0]*C[0] + N[1]*Ro[1] - N[1]*C[1] + N[2]*Ro[2] - N[2]*C[2] - d;
+  t = -non_t_terms / 2*t_terms;
+
+  VERBOSE = 0; // DBG TODO remove
+  if (VERBOSE) printf("Ro[0]: %f, Ro[1]: %f, Ro[2]: %f\n",Ro[0],Ro[1],Ro[2]);
+  if (VERBOSE) printf("Rd[0]: %f, Rd[1]: %f, Rd[2]: %f\n",Rd[0],Rd[1],Rd[2]);
+  if (VERBOSE) printf("C0: %f, C1: %f, C2: %f\n",C[0],C[1],C[2]);
+  if (VERBOSE) printf("N0: %f, N1: %f, N2: %f\n",N[0],N[1],N[2]);
+  if (VERBOSE) printf("t solution: %f\n",t);
+  
+  VERBOSE = 0; // DBG TODO remove
+  // found a solution
+  if (t > 0) {
+    return t;
+  } else {
+    return -1;
+  }
+}
+
 double planeIntersection(double* Ro, double* Rd, double* C, double* N) {
 
   // if Vd = (Pn dot Rd) = 0, no intersection, so compute it first and return if no intersection
@@ -1348,7 +1403,9 @@ double planeIntersection(double* Ro, double* Rd, double* C, double* N) {
   double V0 = vDot(N,the_diff);
 
   VERBOSE = 0; // DBG TODO remove
-  if (VERBOSE) printf("C0: %f, C1: %f, C2: %f\n",the_diff[0],the_diff[1],the_diff[2]);
+  if (VERBOSE) printf("Ro[0]: %f, Ro[1]: %f, Ro[2]: %f\n",Ro[0],Ro[1],Ro[2]);
+  if (VERBOSE) printf("C0: %f, C1: %f, C2: %f\n",C[0],C[1],C[2]);
+  if (VERBOSE) printf("td0: %f, td1: %f, td2: %f\n",the_diff[0],the_diff[1],the_diff[2]);
 
   double t = V0 / Vd;
   if (VERBOSE) printf("V0: %f, Vd: %f, t: %f\n",V0,Vd,t);
@@ -1613,6 +1670,7 @@ void populateLightArray () {
       LIGHT_OBJECTS.light_objects[light_count].radial_a1 = INPUT_FILE_DATA.js_objects[o].radial_a1;
       LIGHT_OBJECTS.light_objects[light_count].radial_a2 = INPUT_FILE_DATA.js_objects[o].radial_a2;
       LIGHT_OBJECTS.light_objects[light_count].angular_a0 = INPUT_FILE_DATA.js_objects[o].angular_a0;
+      LIGHT_OBJECTS.light_objects[light_count].theta = INPUT_FILE_DATA.js_objects[o].theta;
       light_count++;
     }
   }
@@ -1650,26 +1708,37 @@ double fAng (int l_index, double* V) {
   double a1 = LIGHT_OBJECTS.light_objects[l_index].angular_a0;
   double Vl[3]; // this is the vector from the spot in it's direction
   double Vo[3]; // reverse of the V vector
-  double Ve[3]; // this edge vector, from center of spot along it's outer edge
 
   // create the vectors
   Vl[0] = LIGHT_OBJECTS.light_objects[l_index].direction[0];
   Vl[1] = LIGHT_OBJECTS.light_objects[l_index].direction[1];
   Vl[2] = LIGHT_OBJECTS.light_objects[l_index].direction[2];
-  vScale(V,-1,Vo);
+  //  vScale(V,-1,Vo);
+  Vo[0] = V[0];
+  Vo[1] = V[1];
+  Vo[2] = V[2];
 
   // compute the angles
   double alpha = vDot(Vl,Vo);
-  //TODO: confirm this theta assumption
-  double theta = LIGHT_OBJECTS.light_objects[l_index].angular_a0;
+  double theta = LIGHT_OBJECTS.light_objects[l_index].theta;
 
   // now compute and return the value
   if (!LIGHT_OBJECTS.light_objects[l_index].angular_a0) { // not a spotlight, could also use direction??
     return 1.0;
+    //  } else if (abs(alpha) > theta) {
+    // bounds on theta, less than 180 degrees
+    // assume theta is degrees
+    // if (Vobj dot Vlight = cos alpha) < cos theta ( where Vobj = |Vintersection - light position| normalized
+    // cos alpha = Vobj dot Vlight, assume theta in degree, need a degree to radian conversion
+    // Vlight is given in JSON (normalize this too, but he'll give us normalized direction)
   } else if (alpha > theta) {
+    if (DBG2) printf("  fAng r0: V[%f,%f,%f], alpha: %f\n",V[0],V[1],V[2],alpha);
     return 0;
+    // (Vobj dot Vlight) ^ a0
   } else {
-    return pow(vDot(Vo,Vl),a1); 
+    if (DBG2) printf("  fAng rv: Vl[%f,%f,%f], alpha: %f\n",Vl[0],Vl[1],Vl[2],alpha);
+    if (DBG2) printf("  fAng rv: V[%f,%f,%f], alpha: %f\n",V[0],V[1],V[2],alpha);
+    return pow(alpha,a1); 
   }
 }
 
@@ -1715,24 +1784,31 @@ double Idiff (int o_index, int l_index, int c_index, double* N, double* L) {
   }
 
   // calculations
-  double NdotL = vDot(N,L);
+  double N_dot_L = vDot(N,L);
 
-  if (NdotL > 0) {
-    rval = Ka*Ia + Kd*Il*NdotL;
+  if (N_dot_L > 0) {
+    rval = Ka*Ia + Kd*Il*N_dot_L;
   } else {
     rval = Ka*Ia;
   }
-  //if (DBG) printf("DBG Idiff(%f): o_i(%d), c_i(%d), Il(%f), NdL(%f), N[%f,%f,%f], L[%f,%f,%f]\n",rval,o_index,c_index,Il,NdotL,N[0],N[1],N[2],L[0],L[1],L[2]);
+  //if (DBG) printf("DBG Idiff(%f): o_i(%d), c_i(%d), Il(%f), NdL(%f), N[%f,%f,%f], L[%f,%f,%f]\n",rval,o_index,c_index,Il,N_dot_L,N[0],N[1],N[2],L[0],L[1],L[2]);
   return rval;
 }
 
 // Specular reflection funciton
 // specular[0] = Ispec(k, 0, V, R, N, L, ns);
+//
+// Current status 10/18pm - Still cannot get VdotR to give anything but a reflection back toward the camera
+//      Unit tested the reflection vector, I believe it's correct
+//      All inputs are normalized and I believe they are all correct
+///     Tried the halfway vector and it's a total mess - oh wait, the 2nd way seems ok with ns=50
 double Ispec (int o_index, int l_index, int c_index, double* V, double* R, double* N, double* L, double ns) {
   // variables
   double Ks;
   double rval; // for DBG
   double Il = LIGHT_OBJECTS.light_objects[l_index].color[c_index];
+
+  // R = (2N dot L)N - L (where L is light vector V is the view vector, and V = -1 * Rd (vector from intersection back to Ro)
 
   if (INPUT_FILE_DATA.js_objects[o_index].flags.has_specular_color) {
     Ks = INPUT_FILE_DATA.js_objects[o_index].specular_color[c_index];
@@ -1741,43 +1817,72 @@ double Ispec (int o_index, int l_index, int c_index, double* V, double* R, doubl
   }
 
   // calculations
-  double VdotR = vDot(V,R);
-  double NdotL = vDot(N,L);
-  double NdotR = vDot(N,R);
-  double VdotL = vDot(V,L);
+  double V_dot_R = vDot(V,R);
+  double N_dot_L = vDot(N,L);
+  double N_dot_R = vDot(N,R);
+  double V_dot_L = vDot(V,L);
 
-  if (VdotR > 0 && NdotL > 0) {
-    //    rval = Ks*Il*pow(VdotR,ns); // points toward camera always
-    rval = Ks*Il*pow(NdotL,ns); // points toward light
-    // rval = Ks*Il*pow(NdotR,ns); // consumes the sphere unless ns is like 2000, then it seems similar to NdotL
-    //rval = Ks*Il*pow(VdotL,ns);  // takes the spec away entirely
+  if (V_dot_R > 0 && N_dot_L > 0) {
+    //rval = Ks*Il*pow(V_dot_R,ns); // points toward camera always
+    rval = Ks*Il*pow(N_dot_L,ns); // points toward light
+    // rval = Ks*Il*pow(N_dot_R,ns); // consumes the sphere unless ns is like 2000, then it seems similar to N_dot_L
+    //rval = Ks*Il*pow(V_dot_L,ns);  // takes the spec away entirely
+
+    // try the halfway vector: (L + V)/|L + V|
+    double L_plus_V[3];
+    vAdd(L,V,L_plus_V);
+    /* This gives crazy result
+    double H[3];
+    double L_plus_V_length[3] = { L_plus_V[0], L_plus_V[1], L_plus_V[2] };
+    vNormalize(L_plus_V_length);
+    H[0] = L_plus_V[0] / L_plus_V_length[0];
+    H[1] = L_plus_V[1] / L_plus_V_length[1];
+    H[2] = L_plus_V[2] / L_plus_V_length[2];
+    rval = vDot(N,H);
+    */
+    // This seems sane
+    vNormalize(L_plus_V);
+    double H = vDot(N,L_plus_V);
+    rval = Ks*Il*pow(H,ns);
   } else {
     rval = 0;
   }
-  //  if (DBG) printf("DBG Ispec(%f): o_i(%d), c_i(%d), Il(%f), VdR(%f), NdL(%f), V[%f,%f,%f], R[%f,%f,%f], \nN[%f,%f,%f], L[%f,%f,%f]\n",rval,o_index,c_index,Il,VdotR,NdotL,V[0],V[1],V[2],R[0],R[1],R[2],N[0],N[1],N[2],L[0],L[1],L[2]);
+  if (DBG) printf("DBG Ispec(%f): o_i(%d), c_i(%d), Il(%f), VdR(%f), NdL(%f), V[%f,%f,%f], R[%f,%f,%f], \nN[%f,%f,%f], L[%f,%f,%f]\n",rval,o_index,c_index,Il,V_dot_R,N_dot_L,V[0],V[1],V[2],R[0],R[1],R[2],N[0],N[1],N[2],L[0],L[1],L[2]);
   return rval;
 }
 
-double testScale () {
-  // alot of nan in real data
-  double N[3] = {0,1,0};
-  double L[3] = {-1,1,0};
-  double V[3] = {2,1,0};
-  double R[3];
+void getReflectionVector (double* L, double* N, double* R, int DBG_flag) {
 
-  //R = reflection of L about N: R = V - 2(N dot V)N
-  double LdotN = vDot(L,N);
-  LdotN *= 2;
+  // variables
   double S[3]; // scaled vector
-  vScale(N, LdotN, S);
-  R[0] = L[0] - S[0];
-  R[1] = L[1] - S[1];
-  R[2] = L[2] - S[2];
 
-  printf("L = [%f,%f,%f]\n",L[0],L[1],L[2]);
-  printf("V = [%f,%f,%f]\n",V[0],V[1],V[2]);
-  printf("N = [%f,%f,%f]\n",N[0],N[1],N[2]);
-  printf("S = [%f,%f,%f]\n",S[0],S[1],S[2]);
-  printf("LdotN: %f\n",LdotN);
-  printf("R = [%f,%f,%f]\n",R[0],R[1],R[2]);
+  // Formula: R = reflection of L about N: R = L - 2(N dot L)N
+  double L_dot_N = vDot(L,N);
+  L_dot_N *= 2;
+  vScale(N, L_dot_N, S);
+
+  R[0] = S[0] - L[0];
+  R[1] = S[1] - L[1];
+  R[2] = S[2] - L[2];
+
+  if (DBG_flag) printf("L = [%f,%f,%f]\n",L[0],L[1],L[2]);
+  if (DBG_flag) printf("N = [%f,%f,%f]\n",N[0],N[1],N[2]);
+  if (DBG_flag) printf("S = [%f,%f,%f]\n",S[0],S[1],S[2]);
+  if (DBG_flag) printf("L_dot_N: %f\n",L_dot_N);
+  if (DBG_flag) printf("R = [%f,%f,%f]\n",R[0],R[1],R[2]);
 }
+
+// quadric normal - easy way, think of object as a density, equation <= 0 , normal would be awy from more dense part
+// or, form a triangle by shooting multiple rays and get the normal of the traingle
+
+// specular:
+// is the L vector coming in our out, my sign is flipped
+// can use a cheat called the halfway vector (L+V)/(|L+V|) |normalize|
+
+// triangluation is the way that things are done, even in production raytracers
+
+// if you have theta = 0, no direction, or no angular-a0, then the light is a point light
+// he aliased color to diffuse_color, so old JSON also works, we don't have to do that but we can
+// KaIa - could have Ka be some ambience from the object, Ia some ambiance from the light
+// he won't test us on lights on wrong side of plane or inside of sphere
+// create clamp function where any value < 0 becomes 0, anything greater than 1 is 1, then mult by 255 and cast it

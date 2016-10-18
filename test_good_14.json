@@ -6,18 +6,18 @@
 },
 {
 "type": "light",
-"color": [5.0, 5.0, 5.0],
-"position": [0, 6, 5],
-"radial-a2": 0.005,
-"radial-a1": 0.075,
-"radial-a0": 0.01
+"color": [1.0, 1.0, 1.0],
+"position": [0, -5, 10],
+"radial-a2": 1,
+"radial-a1": 1,
+"radial-a0": 1
 },
 {
 "type": "plane",
-"diffuse_color": [0.5, 0.5, 0.5],
+"diffuse_color": [0.1, 0.25, 0],
 "specular_color": [1.0, 0, 0],
-"position": [0, -1, 0],
-"normal": [0, 1, 0]
+"position": [0, 3, 0],
+"normal": [0, -1, 0]
 },
 {
 "type": "sphere",
