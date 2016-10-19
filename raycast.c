@@ -1719,15 +1719,12 @@ double fAng (int l_index, double* V) {
   Vl[0] = LIGHT_OBJECTS.light_objects[l_index].direction[0];
   Vl[1] = LIGHT_OBJECTS.light_objects[l_index].direction[1];
   Vl[2] = LIGHT_OBJECTS.light_objects[l_index].direction[2];
-  //  vScale(V,-1,Vo);
-  Vo[0] = V[0];
-  Vo[1] = V[1];
-  Vo[2] = V[2];
+  vScale(V,-1,Vo);
 
   // compute the angles
   double alpha = vDot(Vl,Vo);
-  // had a great image with 13 once before making this conversion
-  //double theta = degreesToRadians(LIGHT_OBJECTS.light_objects[l_index].theta);
+  // not sure why but this conversion takes the spot away
+  // double theta = degreesToRadians(LIGHT_OBJECTS.light_objects[l_index].theta);
   double theta = LIGHT_OBJECTS.light_objects[l_index].theta;
 
   // now compute and return the value
@@ -1837,8 +1834,8 @@ double Ispec (int o_index, int l_index, int c_index, double* V, double* R, doubl
 
   if (V_dot_R > 0 && N_dot_L > 0) {
     //rval = Ks*Il*pow(V_dot_R,ns); // points toward camera always
-    rval = Ks*Il*pow(N_dot_L,ns); // points toward light
-    // rval = Ks*Il*pow(N_dot_R,ns); // consumes the sphere unless ns is like 2000, then it seems similar to N_dot_L
+    //rval = Ks*Il*pow(N_dot_L,ns); // points toward light
+    //rval = Ks*Il*pow(N_dot_R,ns); // consumes the sphere unless ns is like 2000, then it seems similar to N_dot_L
     //rval = Ks*Il*pow(V_dot_L,ns);  // takes the spec away entirely
 
     // try the halfway vector: (L + V)/|L + V|
