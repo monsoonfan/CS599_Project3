@@ -14,11 +14,13 @@ functions are named with camelCase naming convention
 
 Issues:
 -------
-- need to get spotlights working
-- specular reflection not correct, pointing at the light directly, not the reflection
-  (should be reflection calculation that's not correct)
+- need to check if spotlights working correctly (15.json looks good, but pointed wrong)
+- spotlights seem to be superceding other lights
 - quadric normal appears to be incorrect, diffuse color is on wrong side of cylinder, always same for ellipsoid
   regardless of where I move the light
+
+- looks like multiple lights aren't quite summing correctly (03.json)
+- planes are shadowing each other adn other objects falsely, (12,16.json)
 - what to do about when no specular color is given (like project example JSON)
 
 - planeIntersection appears incorrect, re-do the equations (actually, I think the ray is casting backwards)
@@ -32,14 +34,8 @@ Questions:
 ---------
 ) for spot light of [0,-1,0], the dot product will always equal the 2nd term in the incoming vector, example:
 fAng rv: V[10.000000,-9.050125,-2.277917], alpha: 9.050125 (for the plane on left side at x= -10, and the only thing that happens is y is clamped at theta, not an angle, but a literal value - so clamping looks too hard
-
-3) Why do we multiply by 2 in the reflection equation? It doesn't make sense to me. It basically bends the reflection:
-    Vr = V - 2(n dot v)*n
-
-) distance, I have to really reduce it's value, is it correct?
 ) error checking scenarios (what to do about missing rad/ang attenuations, for example?
 
-TODO: dont seem to be getting specular contribution on planes
 ---------------------------------------------------------------------------------------
 */
 #include <stdio.h>
@@ -1242,8 +1238,8 @@ void rayCast(double* Ro, double* Rd, double* color_in, double* color_out) {
 	  
 	  // compute the angular attenuation
 	  if (DBG) printf(" passing L to fAng: [%f, %f, %f]\n",L[0],L[1],L[2]);
-	  double a_atten = fAng(j, L);
 	  vNormalize(L);
+	  double a_atten = fAng(j, L);
 
 	  // compute the diffuse contribution
 	  double diffuse[3];
