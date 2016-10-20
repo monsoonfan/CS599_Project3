@@ -63,3 +63,5 @@ testscale.c
 spotlight
 plane
 pointlight
+raycast.planeIntDbg.bk.c
+raycast.planeIntDbg.discard.c

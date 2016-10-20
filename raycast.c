@@ -32,8 +32,7 @@ Issues:
 
 Questions:
 ---------
-) for spot light of [0,-1,0], the dot product will always equal the 2nd term in the incoming vector, example:
-fAng rv: V[10.000000,-9.050125,-2.277917], alpha: 9.050125 (for the plane on left side at x= -10, and the only thing that happens is y is clamped at theta, not an angle, but a literal value - so clamping looks too hard
+) spotlight verification
 ) error checking scenarios (what to do about missing rad/ang attenuations, for example?
 
 ---------------------------------------------------------------------------------------
@@ -604,12 +603,6 @@ int main(int argc, char *argv[]) {
   // write the image
   writePPM(outfile,&OUTPUT_FILE_DATA);
 
-  // TODO DBG remove
-  double N[3] = {0,1,0};
-  double L[3] = {-1,1,0};
-  double R[3];
-  getReflectionVector(L,N,R,1);
-  
   // prepare to exit
   freeGlobalMemory();
   return EXIT_SUCCESS;
@@ -730,12 +723,11 @@ void writePPMHeader (FILE* fh) {
   } else if (magic_number == 7) {
     OUTPUT_FILE_DATA.depth      = computeDepth();
     OUTPUT_FILE_DATA.tupltype   = computeTuplType();
-    
     fprintf(fh,"WIDTH %d\n",    OUTPUT_FILE_DATA.width);
     fprintf(fh,"HEIGHT %d\n",   OUTPUT_FILE_DATA.height);
     fprintf(fh,"DEPTH %d\n",    OUTPUT_FILE_DATA.depth);
     fprintf(fh,"MAXVAL %d\n",   OUTPUT_FILE_DATA.alpha);
-    fprintf(fh,"TUPLTYPE %d\n", OUTPUT_FILE_DATA.tupltype);
+    fprintf(fh,"TUPLTYPE %s\n", OUTPUT_FILE_DATA.tupltype);
     fprintf(fh,"ENDHDR\n");
   } else {
     message("Error","Trying to output unsupported format!\n");
@@ -1724,7 +1716,7 @@ double fAng (int l_index, double* V) {
   // compute the angles
   double alpha = vDot(Vl,Vo);
   // not sure why but this conversion takes the spot away
-  // double theta = degreesToRadians(LIGHT_OBJECTS.light_objects[l_index].theta);
+  //double theta = degreesToRadians(LIGHT_OBJECTS.light_objects[l_index].theta);
   double theta = LIGHT_OBJECTS.light_objects[l_index].theta;
 
   // now compute and return the value
@@ -1880,18 +1872,20 @@ void getReflectionVector (double* L, double* N, double* R, int DBG_flag) {
   if (DBG_flag) printf("S = [%f,%f,%f]\n",S[0],S[1],S[2]);
   if (DBG_flag) printf("L_dot_N: %f\n",L_dot_N);
   if (DBG_flag) printf("R = [%f,%f,%f]\n",R[0],R[1],R[2]);
+
+  /* put this in main
+  double N[3] = {0,1,0};
+  double L[3] = {-1,1,0};
+  double R[3];
+  getReflectionVector(L,N,R,1);
+  */
 }
 
 // quadric normal - easy way, think of object as a density, equation <= 0 , normal would be awy from more dense part
 // or, form a triangle by shooting multiple rays and get the normal of the traingle
 
-// specular:
-// is the L vector coming in our out, my sign is flipped
-// can use a cheat called the halfway vector (L+V)/(|L+V|) |normalize|
-
 // triangluation is the way that things are done, even in production raytracers
 
-// he aliased color to diffuse_color, so old JSON also works, we don't have to do that but we can
+// he "aliased" color to diffuse_color, so old JSON also works, we don't have to do that but we can
 // KaIa - could have Ka be some ambience from the object, Ia some ambiance from the light
 // he won't test us on lights on wrong side of plane or inside of sphere
-// create clamp function where any value < 0 becomes 0, anything greater than 1 is 1, then mult by 255 and cast it
