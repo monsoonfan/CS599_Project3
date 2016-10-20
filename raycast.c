@@ -721,8 +721,11 @@ void writePPMHeader (FILE* fh) {
     fprintf(fh,"%d %d\n",       OUTPUT_FILE_DATA.width,OUTPUT_FILE_DATA.height);
     fprintf(fh,"%d\n",          OUTPUT_FILE_DATA.alpha);
   } else if (magic_number == 7) {
-    OUTPUT_FILE_DATA.depth      = computeDepth();
-    OUTPUT_FILE_DATA.tupltype   = computeTuplType();
+    // HACK - hard-code these since the orig ppmrw code depended on readPPM to do this
+    //OUTPUT_FILE_DATA.depth      = computeDepth();
+    OUTPUT_FILE_DATA.depth      = 3;
+    //OUTPUT_FILE_DATA.tupltype   = computeTuplType();
+    OUTPUT_FILE_DATA.tupltype   = "RGB";
     fprintf(fh,"WIDTH %d\n",    OUTPUT_FILE_DATA.width);
     fprintf(fh,"HEIGHT %d\n",   OUTPUT_FILE_DATA.height);
     fprintf(fh,"DEPTH %d\n",    OUTPUT_FILE_DATA.depth);
@@ -757,6 +760,7 @@ void writePPM (char *outfile, PPM_file_struct *input) {
   // -------------------------- write image ----------------------------------
   int pixel_index = 0;
   int modulo;
+
   switch(OUTPUT_FILE_DATA.magic_number) {
     // P3 format
     // Iterate over each pixel in the pixel map and write them byte by byte
@@ -794,8 +798,8 @@ void writePPM (char *outfile, PPM_file_struct *input) {
   default:
     message("Error","Unrecognized output format");
   }
-  // ---------------------- done write image ---------------------------------
 
+  // ---------------------- done write image ---------------------------------
   fclose(fh_out);
   if (INFO) reportPPMStruct(&OUTPUT_FILE_DATA);
   if (INFO) message("Info","Done writing PPM");
